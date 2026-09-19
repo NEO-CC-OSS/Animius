@@ -20,6 +20,13 @@ import io.ktor.client.statement.bodyAsText
 fun createHttpClient(
     clientConfig: HttpClientConfig<*>.() -> Unit = {},
 ) = HttpClient(OkHttp) {
+    engine {
+        // 源站 TLS 缺中间证书时补链（Mxdm/Nyafun 等），详见 TlsChainFix
+        val (socketFactory, trustManager) = TlsChainFix.socketFactoryWithTrustManager()
+        config {
+            sslSocketFactory(socketFactory, trustManager)
+        }
+    }
     install(HttpCookies)
     install(HttpTimeout) {
         requestTimeoutMillis = 300_000

@@ -1,3 +1,4 @@
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -25,8 +26,21 @@ android {
             useSupportLibrary = true
         }
 
-        val dandanplayAppId = System.getenv("DANDANPLAY_APP_ID") ?: ""
-        val dandanplayAppSecret = System.getenv("DANDANPLAY_APP_SECRET") ?: ""
+        // 弹弹play 凭证读取顺序：local.properties（dandanplayAppId/dandanplayAppSecret，文件不进 git）
+        // → 环境变量 → 空串（构建期警告，运行时弹幕会显式提示鉴权失败）
+        val localProps = Properties().apply {
+            val f = rootProject.file("local.properties")
+            if (f.exists()) f.inputStream().use { load(it) }
+        }
+        val dandanplayAppId =
+            localProps.getProperty("dandanplayAppId")
+                ?: System.getenv("DANDANPLAY_APP_ID") ?: ""
+        val dandanplayAppSecret =
+            localProps.getProperty("dandanplayAppSecret")
+                ?: System.getenv("DANDANPLAY_APP_SECRET") ?: ""
+        if (dandanplayAppId.isBlank() || dandanplayAppSecret.isBlank()) {
+            logger.warn("WARN: DANDANPLAY_APP_ID/SECRET 未配置（local.properties 或环境变量），弹幕功能将提示鉴权失败")
+        }
         buildConfigField("String", "DANDANPLAY_APP_ID", "\"$dandanplayAppId\"")
         buildConfigField("String", "DANDANPLAY_APP_SECRET", "\"$dandanplayAppSecret\"")
     }

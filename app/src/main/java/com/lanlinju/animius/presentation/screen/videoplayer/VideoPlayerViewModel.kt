@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import com.anime.danmaku.api.DanmakuSession
+import com.lanlinju.animius.domain.model.DanmakuResult
 import com.lanlinju.animius.domain.model.Episode
 import com.lanlinju.animius.domain.model.Video
 import com.lanlinju.animius.domain.model.WebVideo
@@ -53,6 +54,10 @@ class VideoPlayerViewModel @Inject constructor(
 
     private val _danmakuSession = MutableStateFlow<DanmakuSession?>(null)
     val danmakuSession = _danmakuSession.asStateFlow()
+
+    // 最近一次弹幕获取结果（含失败原因），UI 仅对失败类型轻提示（Success/null 均不渲染）
+    private val _danmakuStatus = MutableStateFlow<DanmakuResult?>(null)
+    val danmakuStatus = _danmakuStatus.asStateFlow()
 
     // 判断是否为本地视频
     private var isLocalVideo = false
@@ -212,6 +217,7 @@ class VideoPlayerViewModel @Inject constructor(
      */
     private fun fetchDanmakuSession() {
         _danmakuSession.value = null // 清除当前剧集的弹幕
+        _danmakuStatus.value = null
 
         // 如果未启用了弹幕，直接返回
         if (!_danmakuEnabled.value) return
@@ -219,8 +225,12 @@ class VideoPlayerViewModel @Inject constructor(
         viewModelScope.launch {
             _videoState.value.data?.let { video ->
                 // 使用视频的标题和集数名获取对应的弹幕
-                _danmakuSession.value =
+                val result =
                     danmakuRepository.fetchDanmakuSession(video.title, video.episodeName)
+                if (result is DanmakuResult.Success) {
+                    _danmakuSession.value = result.session
+                }
+                _danmakuStatus.value = result
             }
         }
     }

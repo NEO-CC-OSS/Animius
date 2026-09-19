@@ -44,6 +44,10 @@ fun DandanplayDanmaku.toDanmakuOrNull(): Danmaku? {
 
 @Serializable
 class DandanplayDanmakuListResponse(
-    val count: Int,
-    val comments: List<DandanplayDanmaku>
+    val count: Int = 0,
+    val comments: List<DandanplayDanmaku> = listOf(),
+    // 鉴权失败等场景服务端返回的是错误结构而非弹幕列表，补齐错误字段以便分类（默认值避免反序列化崩溃）
+    val errorCode: Int = 0,
+    val success: Boolean = true,
+    val errorMessage: String? = null,
 )

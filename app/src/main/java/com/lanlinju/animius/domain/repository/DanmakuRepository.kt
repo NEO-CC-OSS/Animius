@@ -1,7 +1,7 @@
 package com.lanlinju.animius.domain.repository
 
-import com.anime.danmaku.api.DanmakuSession
+import com.lanlinju.animius.domain.model.DanmakuResult
 
 interface DanmakuRepository {
-    suspend fun fetchDanmakuSession(subjectName: String, episodeName: String?): DanmakuSession?
+    suspend fun fetchDanmakuSession(subjectName: String, episodeName: String?): DanmakuResult
 }

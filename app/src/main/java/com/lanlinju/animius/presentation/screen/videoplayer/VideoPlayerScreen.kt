@@ -28,6 +28,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -110,6 +111,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
+import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -120,6 +122,7 @@ import com.anime.danmaku.api.DanmakuPresentation
 import com.anime.danmaku.api.DanmakuSession
 import com.anime.danmaku.ui.DanmakuHost
 import com.anime.danmaku.ui.rememberDanmakuHostState
+import com.lanlinju.animius.domain.model.DanmakuResult
 import com.lanlinju.animius.R
 import com.lanlinju.animius.domain.model.Episode
 import com.lanlinju.animius.domain.model.Video
@@ -174,6 +177,7 @@ fun VideoPlayScreen(
     val animeVideoState by viewModel.videoState.collectAsStateWithLifecycle()
     val danmakuEnabled by viewModel.danmakuEnabled.collectAsStateWithLifecycle()
     val danmakuSession by viewModel.danmakuSession.collectAsStateWithLifecycle()
+    val danmakuStatus by viewModel.danmakuStatus.collectAsStateWithLifecycle()
     val view = LocalView.current
     val activity = LocalActivity.current ?: LocalActivity.current as Activity
     val isAutoOrientation by rememberPreference(KEY_AUTO_ORIENTATION_ENABLED, true)
@@ -280,6 +284,7 @@ fun VideoPlayScreen(
 
                 // Danmaku and additional UI components
                 DanmakuHost(playerState, danmakuSession, danmakuEnabled)
+                DanmakuStatusMessage(danmakuStatus)
                 VideoStateMessage(playerState, viewModel, isAutoContinuePlayEnabled)
                 VolumeBrightnessIndicator(playerState)
                 VideoSideSheet(video, playerState, viewModel)
@@ -445,6 +450,44 @@ private fun DanmakuHost(
                     playTimeMillis = danmakuEvent.playTimeMillis
                 )
             }
+        }
+    }
+}
+
+/**
+ * 弹幕获取失败轻提示：纯文字覆盖层，不创建可聚焦控件（TV 焦点安全），
+ * 显示 6 秒后自动淡出；成功或无状态时不渲染。
+ */
+@Composable
+private fun BoxScope.DanmakuStatusMessage(status: DanmakuResult?) {
+    val failureMessage = when (status) {
+        is DanmakuResult.AuthFailed -> status.message
+        is DanmakuResult.NotFound -> status.message
+        is DanmakuResult.NetworkError -> status.message
+        is DanmakuResult.UnsupportedEpisode -> status.message
+        is DanmakuResult.Success, null -> return
+    }
+    var visible by remember(status) { mutableStateOf(true) }
+    LaunchedEffect(status) {
+        delay(6000)
+        visible = false
+    }
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = Modifier.align(Alignment.TopCenter).padding(top = 48.dp)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = Color.Black.copy(alpha = 0.65f)
+        ) {
+            Text(
+                text = failureMessage,
+                color = Color.White,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
         }
     }
 }
