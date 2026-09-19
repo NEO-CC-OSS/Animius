@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -44,14 +45,21 @@ import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -84,6 +92,7 @@ import com.lanlinju.animius.util.SourceMode
 import com.lanlinju.animius.util.bannerParallax
 import com.lanlinju.animius.util.isWideScreen
 import com.lanlinju.animius.util.rememberPreference
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.lanlinju.animius.R as Res
 
@@ -243,19 +252,36 @@ private fun GridLayoutTabs(
         } else {
             GridCells.Fixed(3)
         }
+        // TV 焦点恢复：记录本页最后聚焦的卡片，从详情页返回时焦点直接回到原卡片
+        // （focusRestorer 只管焦点在页内区块间往返，跨导航返回必须手动 requestFocus）
+        val lastFocusedIndex = rememberSaveable { mutableIntStateOf(-1) }
+        val itemRequesters = remember { mutableMapOf<Int, FocusRequester>() }
+        LaunchedEffect(Unit) {
+            delay(250) // 等 grid 完成首帧组合，requester 才有附着节点
+            if (lastFocusedIndex.intValue > 0) { // index 0 是默认落点附近，无需干预
+                itemRequesters[lastFocusedIndex.intValue]
+                    ?.let { runCatching { it.requestFocus() } }
+            }
+        }
         LazyVerticalGrid(
-            modifier = Modifier.fillMaxSize(),
+            // 返回本页时恢复离开前聚焦的卡片（容器级焦点恢复，不新增可聚焦目标）
+            modifier = Modifier.fillMaxSize().focusRestorer(),
             columns = columns,
             verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(8.dp)
         ) {
-            items(data[page].animeList) { homeItem ->
+            itemsIndexed(data[page].animeList) { index, homeItem ->
+                val itemRequester = remember(index) { FocusRequester() }
+                SideEffect { itemRequesters[index] = itemRequester }
                 MediaSmall(
                     image = homeItem.img,
                     label = homeItem.title,
                     onClick = { onItemClick(homeItem) },
-                    modifier = Modifier.width(dimensionResource(Res.dimen.media_card_width))
+                    modifier = Modifier
+                        .focusRequester(itemRequester)
+                        .onFocusChanged { if (it.isFocused) lastFocusedIndex.intValue = index }
+                        .width(dimensionResource(Res.dimen.media_card_width))
                 )
             }
         }

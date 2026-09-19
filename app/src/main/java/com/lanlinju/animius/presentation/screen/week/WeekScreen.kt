@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -53,11 +54,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,6 +69,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -101,6 +107,7 @@ import com.lanlinju.animius.util.TABS
 import com.lanlinju.animius.util.isAndroidTV
 import com.lanlinju.animius.util.isWideScreen
 import com.lanlinju.animius.util.rememberPreference
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
@@ -256,27 +263,50 @@ fun WeekList(
         }
     }
 
+    // TV 焦点恢复：记录本页最后聚焦的条目，从详情页返回时焦点直接回到原条目
+    // （focusRestorer 只管焦点在页内区块间往返，跨导航返回必须手动 requestFocus）
+    val lastFocusedIndex = rememberSaveable { mutableIntStateOf(-1) }
+    val itemRequesters = remember { mutableMapOf<Int, FocusRequester>() }
+    LaunchedEffect(Unit) {
+        delay(250) // 等 grid 完成首帧组合，requester 才有附着节点
+        if (lastFocusedIndex.intValue > 0) { // index 0 是默认落点附近，无需干预
+            itemRequesters[lastFocusedIndex.intValue]
+                ?.let { runCatching { it.requestFocus() } }
+        }
+    }
+
     LazyVerticalGrid(
-        modifier = modifier.fillMaxSize(),
+        // 返回本页时恢复离开前聚焦的条目（容器级焦点恢复，不新增可聚焦目标）
+        modifier = modifier.fillMaxSize().focusRestorer(),
         columns = columns,
         verticalArrangement = Arrangement.spacedBy(8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(8.dp)
     ) {
         if (useWeekItem) {
-            items(list) { anime ->
+            itemsIndexed(list) { index, anime ->
+                val itemRequester = remember(index) { FocusRequester() }
+                SideEffect { itemRequesters[index] = itemRequester }
                 WeekItem(
                     title = anime.title,
                     subtitle = anime.episodeName,
-                    onClick = { onItemClicked(anime) }
+                    onClick = { onItemClicked(anime) },
+                    modifier = Modifier
+                        .focusRequester(itemRequester)
+                        .onFocusChanged { if (it.isFocused) lastFocusedIndex.intValue = index }
                 )
             }
         } else {
-            items(list) { anime ->
+            itemsIndexed(list) { index, anime ->
+                val itemRequester = remember(index) { FocusRequester() }
+                SideEffect { itemRequesters[index] = itemRequester }
                 MediaSmall(
                     image = anime.img,
                     label = anime.title,
                     onClick = { onItemClicked(anime) },
+                    modifier = Modifier
+                        .focusRequester(itemRequester)
+                        .onFocusChanged { if (it.isFocused) lastFocusedIndex.intValue = index }
                 )
             }
         }
