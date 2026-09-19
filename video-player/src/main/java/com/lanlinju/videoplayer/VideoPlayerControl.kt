@@ -1,10 +1,19 @@
 package com.lanlinju.videoplayer
 
 
+import android.app.UiModeManager
+import android.content.Context
+import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.view.KeyEvent
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,12 +35,25 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
@@ -59,12 +81,19 @@ fun VideoPlayerControl(
     onNextClick: () -> Unit = {},
     onDanmakuClick: (Boolean) -> Unit = {},
     optionsContent: (@Composable () -> Unit)? = null,
+    playPauseFocusRequester: FocusRequester? = null,
 ) {
     CompositionLocalProvider(LocalContentColor provides contentColor) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(background)
+                // TV 焦点导航期间：控制栏内任何焦点变化/按键都重置自动隐藏计时
+                .onFocusChanged { if (it.hasFocus) state.keepControlUiAlive() }
+                .onPreviewKeyEvent {
+                    state.keepControlUiAlive()
+                    false
+                }
                 .padding(
                     start = horizontalPadding(),
                     end = horizontalPadding(),
@@ -93,7 +122,8 @@ fun VideoPlayerControl(
                     state = state,
                     enabledDanmaku = danmakuEnabled,
                     onNextClick = onNextClick,
-                    onDanmakuClick = onDanmakuClick
+                    onDanmakuClick = onDanmakuClick,
+                    playPauseFocusRequester = playPauseFocusRequester
                 )
             }
         }
@@ -117,10 +147,12 @@ private fun ControlHeader(
         verticalAlignment = Alignment.CenterVertically
     ) {
         IconButton(
-            modifier = Modifier.size(BigIconButtonSize),
+            modifier = Modifier
+                .tvControlFocus()
+                .size(BigIconButtonSize),
             onClick = { onBackClick?.invoke() }
         ) {
-            Icon(imageVector = Icons.Rounded.ArrowBackIos, contentDescription = null)
+            Icon(imageVector = Icons.Rounded.ArrowBackIos, contentDescription = "返回")
         }
 
         Column(modifier = Modifier.weight(1f)) {
@@ -154,7 +186,8 @@ private fun BottomControlBar(
     state: VideoPlayerState,
     enabledDanmaku: Boolean,
     onNextClick: () -> Unit,
-    onDanmakuClick: (Boolean) -> Unit
+    onDanmakuClick: (Boolean) -> Unit,
+    playPauseFocusRequester: FocusRequester? = null,
 ) {
     val timestamp =
         remember(
@@ -166,6 +199,9 @@ private fun BottomControlBar(
                 state.videoDurationMs.value.milliseconds
             )
         }
+    val context = LocalContext.current
+    val isTv = remember { isTvDevice(context) }
+    var sliderFocused by remember { mutableStateOf(false) }
 
     Column(modifier = modifier) {
         if (!state.isSeeking.value) {
@@ -182,11 +218,40 @@ private fun BottomControlBar(
             onClick = { state.onClickSlider(it) },
             onValueChange = { state.onSeeking(it) },
             onValueChangeFinished = { state.onSeeked() },
+            isSeeking = state.isSeeking.value || sliderFocused,
+            color = progressLineColor,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(30.dp),
-            isSeeking = state.isSeeking.value,
-            color = progressLineColor,
+                .height(30.dp)
+                .then(
+                    if (isTv) Modifier
+                        .onFocusChanged { sliderFocused = it.isFocused }
+                        .focusable()
+                        // 总表：焦点在进度条时左右＝拖动进度。单击步进 15s 立即 seek
+                        // （与点击进度条行为一致）；过滤按住重复，防止连发疯狂跳集
+                        .onKeyEvent { keyEvent ->
+                            if (keyEvent.type == KeyEventType.KeyDown &&
+                                keyEvent.nativeKeyEvent.repeatCount == 0
+                            ) {
+                                when (keyEvent.nativeKeyEvent.keyCode) {
+                                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                        state.control.skip(-15_000L)
+                                        true
+                                    }
+
+                                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                        state.control.skip(15_000L)
+                                        true
+                                    }
+
+                                    else -> false
+                                }
+                            } else {
+                                false
+                            }
+                        }
+                    else Modifier
+                ),
         )
 
         if (!state.isSeeking.value) {
@@ -200,7 +265,8 @@ private fun BottomControlBar(
                 resizeText = state.resizeText.value,
                 onSpeedClick = state::showSpeedUi,
                 onResizeClick = state::showResizeUi,
-                onEpisodeClick = state::showEpisodeUi
+                onEpisodeClick = state::showEpisodeUi,
+                playPauseFocusRequester = playPauseFocusRequester
             )
         } else Spacer(modifier = Modifier.size(MediumIconButtonSize))
     }
@@ -225,7 +291,7 @@ private fun TimelineControl(
         ) {
             Icon(
                 imageVector = if (isFullScreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
-                contentDescription = null
+                contentDescription = if (isFullScreen) "退出全屏" else "全屏"
             )
         }
     }
@@ -242,7 +308,8 @@ private fun PlaybackControl(
     resizeText: String,
     onSpeedClick: () -> Unit,
     onResizeClick: () -> Unit,
-    onEpisodeClick: () -> Unit
+    onEpisodeClick: () -> Unit,
+    playPauseFocusRequester: FocusRequester? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -253,7 +320,7 @@ private fun PlaybackControl(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            PlayPauseButton(isPlaying, onPlayPause)
+            PlayPauseButton(isPlaying, onPlayPause, playPauseFocusRequester)
             NextEpisodeIcon(onClick = onNextClick)
             DanmakuIcon(onClick = onDanmakuClick, danmakuEnabled = enabledDanmaku)
         }
@@ -267,15 +334,24 @@ private fun PlaybackControl(
 }
 
 @Composable
-private fun PlayPauseButton(isPlaying: Boolean, onPlayPause: () -> Unit) {
+private fun PlayPauseButton(
+    isPlaying: Boolean,
+    onPlayPause: () -> Unit,
+    focusRequester: FocusRequester?,
+) {
     AdaptiveIconButton(
-        modifier = Modifier.size(MediumIconButtonSize),
+        modifier = Modifier
+            .size(MediumIconButtonSize)
+            .then(
+                if (focusRequester != null) Modifier.focusRequester(focusRequester)
+                else Modifier
+            ),
         onClick = onPlayPause
     ) {
         Icon(
             modifier = Modifier.fillMaxSize(),
             imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-            contentDescription = null
+            contentDescription = if (isPlaying) "暂停" else "播放"
         )
     }
 }
@@ -356,6 +432,7 @@ private fun AdaptiveIconButton(
 
     Box(
         modifier = modifier
+            .tvControlFocus()
             .clip(CircleShape)
             .clickable(
                 onClick = onClick,
@@ -366,6 +443,47 @@ private fun AdaptiveIconButton(
         contentAlignment = Alignment.Center
     ) {
         content()
+    }
+}
+
+private fun isTvDevice(context: Context): Boolean {
+    val uiModeManager = context.getSystemService(Context.UI_MODE_SERVICE) as UiModeManager
+    val isTv = uiModeManager.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
+    val hasLeanbackFeature =
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+    return isTv || hasLeanbackFeature
+}
+
+/**
+ * 播放器控制栏的 TV 焦点外观（与 app 模块的 TvFocus 同款机制，主题色描边+放大）。
+ * 控制栏背景为深色，按钮小，描边收窄到 2dp、放大 1.1 保证辨识度。
+ * 模块内独立实现：video-player 不依赖 app，两端样式语义保持一致。
+ */
+private fun Modifier.tvControlFocus(): Modifier = composed {
+    val context = LocalContext.current
+    val isTv = remember { isTvDevice(context) }
+    if (!isTv) {
+        this
+    } else {
+        var isFocused by remember { mutableStateOf(false) }
+        val scale by animateFloatAsState(
+            targetValue = if (isFocused) 1.1f else 1f,
+            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+            label = "tvControlScale"
+        )
+        val borderAlpha by animateFloatAsState(
+            targetValue = if (isFocused) 1f else 0f,
+            animationSpec = spring(stiffness = Spring.StiffnessMedium),
+            label = "tvControlBorderAlpha"
+        )
+        this
+            .onFocusChanged { isFocused = it.isFocused }
+            .scale(scale)
+            .border(
+                width = 2.dp,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = borderAlpha),
+                shape = CircleShape
+            )
     }
 }
 

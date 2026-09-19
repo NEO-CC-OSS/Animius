@@ -5,13 +5,8 @@ import android.graphics.Bitmap
 import android.text.Html
 import android.widget.Toast
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
-import androidx.compose.foundation.hoverable
-import androidx.compose.foundation.indication
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -118,6 +113,7 @@ import com.lanlinju.animius.presentation.component.ScrollableText
 import com.lanlinju.animius.presentation.component.StateHandler
 import com.lanlinju.animius.presentation.component.TranslucentStatusBarLayout
 import com.lanlinju.animius.presentation.component.WarningMessage
+import com.lanlinju.animius.presentation.component.tvFocus
 import com.lanlinju.animius.presentation.navigation.PlayerParameters
 import com.lanlinju.animius.util.CROSSFADE_DURATION
 import com.lanlinju.animius.util.KEY_DYNAMIC_IMAGE_COLOR
@@ -128,9 +124,9 @@ import com.lanlinju.animius.util.bannerParallax
 import com.lanlinju.animius.util.dynamicColorOf
 import com.lanlinju.animius.util.isAndroidTV
 import com.lanlinju.animius.util.isWideScreen
-import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.rememberPreference
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import com.lanlinju.animius.R as Res
@@ -200,6 +196,17 @@ fun AnimeDetailScreen(
                             .fillMaxWidth()
                             .bannerParallax(scrollState)
                     )
+
+                    val isTv = remember { isAndroidTV(context) }
+
+                    // TV 上进详情页：焦点落在"上次看的那集"按钮（无历史=第 1 集），
+                    // 按确定即可直接续播；但焦点会把整页拖到剧集行，所以延迟把整页
+                    // 滚回顶部——标题/封面信息照常可见，焦点位置不变（P2-2 用户方案）。
+                    LaunchedEffect(isTv) {
+                        if (!isTv) return@LaunchedEffect
+                        delay(500) // 等剧集按钮完成聚焦与 bringIntoView 滚动
+                        runCatching { scrollState.scrollTo(0) }
+                    }
 
                     TopAppBar(
                         detailUrl = viewModel.detailUrl,
@@ -402,7 +409,10 @@ private fun TopAppBar(
     TopAppBar(
         title = { },
         navigationIcon = {
-            IconButton(onClick = onBackClick) {
+            IconButton(
+                modifier = Modifier.tvFocus(shape = CircleShape),
+                onClick = onBackClick
+            ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                     contentDescription = stringResource(id = R.string.back),
@@ -412,7 +422,10 @@ private fun TopAppBar(
         },
         actions = {
             Box {
-                IconButton(onClick = { expanded = true }) {
+                IconButton(
+                    modifier = Modifier.tvFocus(shape = CircleShape),
+                    onClick = { expanded = true }
+                ) {
                     Icon(
                         imageVector = Icons.Rounded.MoreVert,
                         contentDescription = stringResource(id = R.string.more),
@@ -476,6 +489,7 @@ private fun FavouriteIcon(
     )
 
     IconButton(
+        modifier = Modifier.tvFocus(shape = CircleShape),
         colors = IconButtonDefaults.iconButtonColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
                 alpha = 0.45f
@@ -513,6 +527,7 @@ fun AnimeBanner(
                 .build(),
             contentDescription = null,
             contentScale = ContentScale.Crop,
+            error = painterResource(Res.drawable.background),
             modifier = modifier
                 .blur(if (isWideScreen(LocalContext.current)) 24.dp else 0.dp),
             alignment = Alignment.Center,
@@ -572,6 +587,7 @@ fun AnimeGenres(
     ) {
         items(genres) { genre ->
             SuggestionChip(
+                modifier = Modifier.tvFocus(shape = CircleShape),
                 label = {
                     Text(
                         text = genre.uppercase(),
@@ -621,19 +637,17 @@ fun AnimeEpisodes(
     ) {
         itemsIndexed(if (!reverseList) episodes else episodes.reversed()) { index, episode ->
             val focusRequester = remember { FocusRequester() }
-            val interactionSource = remember { MutableInteractionSource() }
-//            var focusIndex by rememberSaveable { mutableStateOf(lastPosition) } // 保存焦点位置
             FilledTonalButton(
                 onClick = { onEpisodeClick(index, episode) },
                 colors = ButtonDefaults.filledTonalButtonColors(containerColor = color.copy(0.5f)),
                 modifier = Modifier.run {
                     if (isAndroidTV) {
-//                        onFocusChanged { if (it.isFocused) focusIndex = index }
-                        clip(CircleShape)
-                            .indication(interactionSource, LocalIndication.current)
-                            .hoverable(interactionSource)
+                        // TV 分支不得再手挂 indication/hoverable/focusable：
+                        // Button 内部 clickable 本身就是焦点目标，重复挂会造出第二个
+                        // "只有焦点、没有点击"的节点，把第一下确定吃掉（方案 P1-5）
+                        tvFocus(shape = CircleShape)
+                            .clip(CircleShape)
                             .focusRequester(focusRequester)
-                            .focusable(interactionSource = interactionSource)
                     } else this
                 }
             ) {
@@ -649,7 +663,6 @@ fun AnimeEpisodes(
 
             LaunchedEffect(Unit) {
                 if (index == lastPosition && isAndroidTV) {
-                    "focusRequester: ${lastPosition + 1}".log("AnimeDetailScreen")
                     focusRequester.requestFocus()
                 }
             }
@@ -707,7 +720,9 @@ private fun EpisodeListControl(
     ) {
         if (isShowChannel) {
             Text(
-                modifier = Modifier.clickable(onClick = onChannelClick),
+                modifier = Modifier
+                    .tvFocus(shape = CircleShape)
+                    .clickable(onClick = onChannelClick),
                 text = stringResource(Res.string.channel_number, channelIndex + 1),
                 color = MaterialTheme.colorScheme.primary,
                 style = MaterialTheme.typography.labelMedium
@@ -716,7 +731,9 @@ private fun EpisodeListControl(
             Spacer(modifier = Modifier.size(12.dp))
         }
         Text(
-            modifier = Modifier.clickable(onClick = onReverseClick),
+            modifier = Modifier
+                .tvFocus(shape = CircleShape)
+                .clickable(onClick = onReverseClick),
             text = stringResource(id = Res.string.reverse_list),
             color = MaterialTheme.colorScheme.primary,
             style = MaterialTheme.typography.labelMedium
@@ -725,7 +742,9 @@ private fun EpisodeListControl(
         Spacer(modifier = Modifier.size(12.dp))
 
         Row(
-            modifier = Modifier.clickable(onClick = onMoreClick),
+            modifier = Modifier
+                .tvFocus(shape = CircleShape)
+                .clickable(onClick = onMoreClick),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
@@ -805,6 +824,7 @@ private fun EpisodeBottomSheet(
                 items = if (!reverseList) episodes else episodes.reversed(),
                 key = { _, e -> e.url }) { index, episode ->
                 SuggestionChip(
+                    modifier = Modifier.tvFocus(shape = CircleShape),
                     onClick = {
                         when {
                             isDownload -> onDownloadClick(index, episode)

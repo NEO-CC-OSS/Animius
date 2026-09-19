@@ -11,7 +11,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import com.lanlinju.animius.presentation.component.tvFocus
+import com.lanlinju.animius.util.isAndroidTV
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -31,6 +35,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextMeasurer
@@ -67,7 +77,10 @@ fun DanmakuSettingsScreen(onBackClick: () -> Unit = {}) {
                 title = { Text(text = stringResource(id = R.string.danmaku_settings)) },
                 scrollBehavior = topBarBehavior,
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
+                    IconButton(
+                        modifier = Modifier.tvFocus(shape = CircleShape),
+                        onClick = onBackClick
+                    ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                             contentDescription = stringResource(id = R.string.back)
@@ -330,14 +343,60 @@ fun SliderItem(
     title: String,
     value: Float,
     onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
     steps: Int = 0,
     onValueChangeFinished: (() -> Unit)? = null,
     valueLabel: String = "",
     titleStyle: TextStyle = MaterialTheme.typography.titleMedium,
 ) {
+    // TV（P0-4）：焦点落在整行，左右键步进调节；有 steps 的滑块按档位步进，否则按量程 1/10。
+    // 用 onPreviewKeyEvent 在事件到达内部 Slider 之前拦截，上下键放行走焦点导航
+    val isTv = isAndroidTV(LocalContext.current)
+    val stepDelta = if (steps > 0) {
+        (valueRange.endInclusive - valueRange.start) / (steps + 1)
+    } else {
+        (valueRange.endInclusive - valueRange.start) / 10f
+    }
     ListItem(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier
+            .tvFocus(shape = RoundedCornerShape(12.dp))
+            .then(
+                if (isTv) {
+                    Modifier.onPreviewKeyEvent { keyEvent ->
+                        when (keyEvent.type) {
+                            KeyEventType.KeyDown -> when (keyEvent.key) {
+                                Key.DirectionLeft -> {
+                                    onValueChange((value - stepDelta).coerceIn(valueRange))
+                                    true
+                                }
+
+                                Key.DirectionRight -> {
+                                    onValueChange((value + stepDelta).coerceIn(valueRange))
+                                    true
+                                }
+
+                                else -> false
+                            }
+
+                            KeyEventType.KeyUp -> when (keyEvent.key) {
+                                // 松开左/右视为一次调节结束，触发提交（等价于拖动松手）。
+                                // 不补这一下的话，依赖 onValueChangeFinished 保存的设置永远写不进偏好
+                                Key.DirectionLeft, Key.DirectionRight -> {
+                                    onValueChangeFinished?.invoke()
+                                    true
+                                }
+
+                                else -> false
+                            }
+
+                            else -> false
+                        }
+                    }
+                } else {
+                    Modifier
+                }
+            ),
         headlineContent = {
             Row(
                 modifier = Modifier.fillMaxWidth(),

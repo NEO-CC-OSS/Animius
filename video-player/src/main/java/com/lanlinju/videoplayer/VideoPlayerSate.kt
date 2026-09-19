@@ -244,6 +244,14 @@ class VideoPlayerStateImpl(
         }
     }
 
+    /**
+     * TV 端焦点导航模式专用：控制栏内任意按键/焦点变化时重置自动隐藏计时，
+     * 防止用户正在按钮间移动焦点时控制栏超时收起、焦点随 AnimatedVisibility 一起丢失。
+     */
+    override fun keepControlUiAlive() {
+        controlUiLastInteractionMs = 0
+    }
+
     override fun setSpeedText(text: String) {
         speedText.value = text
     }
@@ -454,6 +462,7 @@ interface VideoPlayerState {
 
     fun hideControlUi()
     fun showControlUi()
+    fun keepControlUiAlive()
 
     fun showSpeedUi()
     fun hideSpeedUi()

@@ -19,10 +19,10 @@
     <string name="anime_detail">动漫详情页</string>
     <string name="website_address">网址</string>
 
-    <string name="home">Home</string>
+    <string name="home">主页</string>
     <string name="profile">Profile</string>
-    <string name="search">Search</string>
-    <string name="more">more</string>
+    <string name="search">搜索</string>
+    <string name="more">更多</string>
     <string name="week">WeekRank</string>
     <string name="download">下载</string>
     <string name="rslash">r/</string>
@@ -30,9 +30,14 @@
     <string name="brightness">brightness</string>
     <string name="volume_mute">volume mute</string>
     <string name="volume_up">volume up</string>
-    <string name="favourite">favourite</string>
-    <string name="history">history</string>
+    <string name="favourite">追番</string>
+    <string name="history">历史记录</string>
     <string name="fast_forward_2x">2x倍速中</string>
+    <string name="forward_85s">快进85秒</string>
+    <string name="clear">清除</string>
+    <string name="paste">粘贴</string>
+    <string name="lbl_video">视频</string>
+    <string name="lbl_manga">漫画</string>
     <string name="resume_play">继续播放</string>
     <string name="play_history">播放记录</string>
     <string name="delete">删除</string>
@@ -122,6 +127,8 @@
     <!-- 历史记录界面 -->
     <string name="clear_all_histories">清除全部记录</string>
     <string name="are_you_sure_you_want_to_clear_all_histories">确定要清除所有历史记录吗？</string>
+    <string name="delete_history_record">删除记录</string>
+    <string name="confirm_delete_this_history">确定要删除这条历史记录吗？</string>
 
     <string name="use_download_directory">使用Download目录</string>
     <string name="auto_continue_play">自动连播</string>

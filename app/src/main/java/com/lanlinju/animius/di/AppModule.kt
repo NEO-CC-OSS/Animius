@@ -50,8 +50,10 @@ object AppModule {
             application,
             AnimeDatabase::class.java,
             ANIME_DATABASE,
-        ).fallbackToDestructiveMigration()
-            .build()
+        ).build()
+        // 已移除 fallbackToDestructiveMigration：原配置在数据库版本升级时直接清空
+        // 全部历史/收藏/下载记录。今后给 Entity 加字段/表时必须同步新增 Migration
+        // (addMigrations)，否则升级会直接崩溃，而不是静默清库。
     }
 
     @Singleton

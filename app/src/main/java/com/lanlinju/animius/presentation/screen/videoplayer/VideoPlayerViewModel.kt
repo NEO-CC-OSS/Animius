@@ -63,6 +63,9 @@ class VideoPlayerViewModel @Inject constructor(
     private var currentEpisodeIndex: Int = 0
     private var historyId: Long = -1L
 
+    // 导航参数（标题/集数列表等），retry 时旧数据已被 Loading 清空，需由此重建 Video
+    private var playerParams: PlayerParameters? = null
+
     // 自动连播相关
     private var autoContinuePlayJob: Job? = null
 
@@ -71,6 +74,7 @@ class VideoPlayerViewModel @Inject constructor(
             // 从SavedStateHandle中获取播放模式和视频集数的URL
             savedStateHandle.toRoute<Screen.VideoPlayer>().let {
                 val params = PlayerParameters.deserialize(it.parameters)
+                playerParams = params
                 this@VideoPlayerViewModel.mode = params.mode
                 val url = params.episodes[params.episodeIndex].url
                 if (params.isLocalVideo) {
@@ -165,16 +169,31 @@ class VideoPlayerViewModel @Inject constructor(
                 .onSuccess { webVideo ->
                     val lastPlayPosition =
                         roomRepository.getEpisode(episodeUrl).first()?.lastPlayPosition ?: 0L
+                    val existing = _videoState.value.data
                     _videoState.value = Resource.Success(
-                        _videoState.value.data!!.let {
-                            it.copy(
+                        // 换集时旧数据还在，在其上合并新地址；retry 时旧数据已被
+                        // Resource.Loading 清空（data == null），必须从导航参数重建，
+                        // 否则这里就是"重试成功反而崩溃"（P2-4）
+                        existing?.copy(
+                            url = webVideo.url,
+                            currentEpisodeIndex = index,
+                            episodeName = existing.episodes[index].name,
+                            episodeUrl = episodeUrl,
+                            lastPlayPosition = lastPlayPosition,
+                            headers = webVideo.headers
+                        ) ?: playerParams?.let { params ->
+                            val episode = params.episodes[index]
+                            Video(
+                                title = params.title,
                                 url = webVideo.url,
-                                currentEpisodeIndex = index,
-                                episodeName = it.episodes[index].name,
+                                episodeName = episode.name,
                                 episodeUrl = episodeUrl,
-                                lastPlayPosition = lastPlayPosition
+                                lastPlayPosition = lastPlayPosition,
+                                currentEpisodeIndex = index,
+                                episodes = params.episodes,
+                                headers = webVideo.headers
                             )
-                        }
+                        } ?: return@onSuccess
                     )
 
                     fetchDanmakuSession() // 视频加载成功后获取弹幕

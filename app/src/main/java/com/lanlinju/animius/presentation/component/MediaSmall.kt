@@ -22,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -73,6 +74,7 @@ fun MediaSmall(
 ) {
     MediaSmall(
         modifier = modifier
+            .tvFocus(shape = RoundedCornerShape(dimensionResource(Res.dimen.media_card_corner_radius)))
             .clip(RoundedCornerShape(dimensionResource(Res.dimen.media_card_corner_radius)))
             .combinedClickable(
                 enabled = enabled,
@@ -106,13 +108,16 @@ fun MediaSmall(
                 .build(),
             contentDescription = label,
             contentScale = ContentScale.Crop,
+            // 加载失败兜底底图，避免黑块还能聚焦点击（P2-1）
+            error = painterResource(Res.drawable.background),
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.7f)
                 .clip(RoundedCornerShape(dimensionResource(Res.dimen.media_card_corner_radius))),
             onSuccess = {
-                val bitmap = (it.result.drawable as BitmapDrawable).bitmap
-                onSuccess(bitmap)
+                // 某些来源返回非位图（如矢量/GIF）时强转会崩，取不到位图就跳过取色回调
+                val bitmap = (it.result.drawable as? BitmapDrawable)?.bitmap
+                if (bitmap != null) onSuccess(bitmap)
             }
         )
 

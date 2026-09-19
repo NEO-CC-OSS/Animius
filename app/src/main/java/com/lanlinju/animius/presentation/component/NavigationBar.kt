@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.Icon
@@ -143,10 +144,11 @@ fun AdaptiveNavigationBar(
             destinations.forEachIndexed { index, destination ->
                 val selected = destination.route == currentDestination
                 NavigationRailItem(
+                    modifier = Modifier.tvFocus(shape = RoundedCornerShape(12.dp)),
                     selected = selected,
                     onClick = { onNavigateToDestination(index) },
                     icon = destination.icon,
-                    label = { Text(destination.route) }, // 可选：添加标签
+                    label = { Text(destination.label()) }, // 中文标签资源，dump/读屏可读
                 )
             }
         }

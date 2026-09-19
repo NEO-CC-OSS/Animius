@@ -21,6 +21,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -85,6 +86,7 @@ import com.lanlinju.animius.presentation.component.LoadingIndicator
 import com.lanlinju.animius.presentation.component.MediaSmall
 import com.lanlinju.animius.presentation.component.StateHandler
 import com.lanlinju.animius.presentation.component.WarningMessage
+import com.lanlinju.animius.presentation.component.tvFocus
 import com.lanlinju.animius.presentation.theme.padding
 import com.lanlinju.animius.util.GITHUB_ADDRESS
 import com.lanlinju.animius.util.GITHUB_RELEASE_ADDRESS
@@ -132,9 +134,11 @@ fun WeekScreen(
         Column {
             TopAppBar(
                 title = {
-                    Column(modifier = Modifier.clickable {
-                        showSourceSwitchDialog = true
-                    }) {
+                    Column(
+                        modifier = Modifier
+                            .tvFocus(shape = RoundedCornerShape(8.dp))
+                            .clickable { showSourceSwitchDialog = true }
+                    ) {
                         Text(
                             text = stringResource(id = R.string.lbl_schedule),
                             style = MaterialTheme.typography.titleLarge
@@ -167,6 +171,7 @@ fun WeekScreen(
             ) {
                 TABS.forEachIndexed { index, title ->
                     Tab(
+                        modifier = Modifier.tvFocus(shape = RoundedCornerShape(8.dp)),
                         text = { Text(text = title) },
                         selected = pagerState.currentPage == index,
                         onClick = { scope.launch { pagerState.scrollToPage(index) } },
@@ -333,7 +338,10 @@ private fun AppBarAction(
     )
 
     Box {
-        IconButton(onClick = { menuExpanded = true }) {
+        IconButton(
+            modifier = Modifier.tvFocus(shape = CircleShape),
+            onClick = { menuExpanded = true }
+        ) {
             Icon(
                 imageVector = Icons.Rounded.MoreVert,
                 contentDescription = stringResource(id = R.string.more)
@@ -360,21 +368,30 @@ private fun AppBarNavigation(
     onNavigateToSearch: () -> Unit,
     onNavigateToDownload: () -> Unit
 ) {
-    IconButton(onClick = onNavigateToHistory) {
+    IconButton(
+        modifier = Modifier.tvFocus(shape = CircleShape),
+        onClick = onNavigateToHistory
+    ) {
         Icon(
             painter = painterResource(id = R.drawable.ic_history),
             contentDescription = stringResource(id = R.string.history)
         )
     }
 
-    IconButton(onClick = onNavigateToSearch) {
+    IconButton(
+        modifier = Modifier.tvFocus(shape = CircleShape),
+        onClick = onNavigateToSearch
+    ) {
         Icon(
             imageVector = Icons.Rounded.Search,
             contentDescription = stringResource(id = R.string.search)
         )
     }
 
-    IconButton(onClick = onNavigateToDownload) {
+    IconButton(
+        modifier = Modifier.tvFocus(shape = CircleShape),
+        onClick = onNavigateToDownload
+    ) {
         Icon(
             imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
             modifier = Modifier.rotate(90f),
@@ -611,6 +628,7 @@ private fun SourceSwitchDialog(
 
                     Row(
                         Modifier
+                            .tvFocus(shape = RoundedCornerShape(8.dp))
                             .fillMaxWidth()
                             .height(dimensionResource(id = R.dimen.radio_button_height))
                             .clip(
@@ -645,6 +663,7 @@ private fun SourceSwitchDialog(
         },
         confirmButton = {
             TextButton(
+                modifier = Modifier.tvFocus(shape = CircleShape),
                 onClick = {
                     val mode = SourceMode.valueOf(selectedOption)
                     currentSourceMode = mode            // 保存默认源到偏好设置
@@ -658,7 +677,10 @@ private fun SourceSwitchDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismissRequest) {
+            TextButton(
+                modifier = Modifier.tvFocus(shape = CircleShape),
+                onClick = onDismissRequest
+            ) {
                 Text(stringResource(R.string.cancel))
             }
         }
@@ -702,7 +724,9 @@ private fun SettingsDialog(
                 )
 
                 TextButton(
-                    modifier = Modifier.align(Alignment.End),
+                    modifier = Modifier
+                        .tvFocus(shape = CircleShape)
+                        .align(Alignment.End),
                     onClick = onDismissRequest
                 ) {
                     Text(stringResource(R.string.close))
@@ -731,6 +755,7 @@ private fun SettingsItem(
         )
 
         Switch(
+            modifier = Modifier.tvFocus(shape = CircleShape),
             checked = checked,
             onCheckedChange = onCheckedChange
         )
@@ -786,7 +811,7 @@ private fun DomainChangeDialog(
                         }) {
                             Icon(
                                 painterResource(id = R.drawable.ic_content_paste),
-                                contentDescription = null
+                                contentDescription = stringResource(id = R.string.paste)
                             )
                         }
                     },

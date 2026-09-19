@@ -4,8 +4,6 @@ package com.lanlinju.animius.presentation.screen.search
 import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.border
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Clear
@@ -45,7 +42,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.dimensionResource
@@ -57,6 +53,7 @@ import com.lanlinju.animius.R
 import com.lanlinju.animius.presentation.component.MediaSmall
 import com.lanlinju.animius.presentation.component.PaginationStateHandler
 import com.lanlinju.animius.presentation.component.WarningMessage
+import com.lanlinju.animius.presentation.component.tvFocus
 import com.lanlinju.animius.presentation.screen.captcha.CaptchaWebViewActivity
 import com.lanlinju.animius.util.SourceMode
 import com.lanlinju.animius.util.isAndroidTV
@@ -144,7 +141,7 @@ fun SearchScreen(
                     trailingIcon = {
                         Row {
                             IconButton(onClick = viewModel::clearSearchQuery) {
-                                Icon(imageVector = Icons.Rounded.Clear, contentDescription = "")
+                                Icon(imageVector = Icons.Rounded.Clear, contentDescription = stringResource(id = R.string.clear))
                             }
                             Box {
                                 IconButton(onClick = { menuExpanded = true }) {
@@ -199,7 +196,6 @@ fun SearchScreen(
             ) {
                 items(count = animesState.itemCount) { index ->
                     val mediaFocusRequester = remember { FocusRequester() }
-                    var isFocused by remember { mutableStateOf(false) }
                     val item = animesState[index]!!
                     MediaSmall(
                         image = item.img,
@@ -207,19 +203,11 @@ fun SearchScreen(
                         onClick = {
                             onNavigateToAnimeDetail(item.detailUrl, viewModel.currentSourceMode)
                         },
+                        // 不得再外挂 .focusable()：MediaSmall 内部 combinedClickable 已是焦点目标，
+                        // 重复挂会把第一下确定吃掉（同方案 P1-5）；tvFocus 已内置在 MediaSmall，
+                        // 调用处再挂一次会画出两圈框
                         modifier = Modifier
-                            .onFocusChanged(onFocusChanged = { isFocused = it.isFocused })
-                            .run {
-                                if (isFocused && isAndroidTV) {
-                                    border(
-                                        4.dp, MaterialTheme.colorScheme.primary,
-                                        RoundedCornerShape(dimensionResource(R.dimen.media_card_corner_radius))
-                                    )
-                                } else this
-                            }
-//                        .scale(if (isFocused && isAndroidTV) 1.1f else 1f)
                             .focusRequester(mediaFocusRequester) // 设置焦点请求者
-                            .focusable()
                     )
 
                     LaunchedEffect(item.detailUrl) {

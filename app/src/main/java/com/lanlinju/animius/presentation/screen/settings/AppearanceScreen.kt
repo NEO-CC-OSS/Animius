@@ -19,9 +19,11 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import com.lanlinju.animius.presentation.component.tvFocus
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Colorize
 import androidx.compose.material.icons.outlined.Image
@@ -42,12 +44,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
@@ -78,7 +82,10 @@ fun AppearanceScreen(
                 title = { Text(text = stringResource(id = R.string.appearance_settings)) },
                 scrollBehavior = topBarBehavior,
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
+                    IconButton(
+                        modifier = Modifier.tvFocus(shape = CircleShape),
+                        onClick = onBackClick
+                    ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                             contentDescription = stringResource(id = R.string.back)
@@ -169,6 +176,7 @@ private fun ThemeModeSettings(modifier: Modifier = Modifier) {
         SingleChoiceSegmentedButtonRow {
             options.forEachIndexed { index, label ->
                 SegmentedButton(
+                    modifier = Modifier.tvFocus(shape = RoundedCornerShape(8.dp)),
                     shape = SegmentedButtonDefaults.itemShape(
                         index = index,
                         count = options.size
@@ -209,10 +217,16 @@ fun ColorBall(
             val isSelected = color == selectedColor && isCheckVisible
             val containerSize by animateDpAsState(targetValue = if (isSelected) 28.dp else 0.dp)
             val iconSize by animateDpAsState(targetValue = if (isSelected) 16.dp else 0.dp)
+            var ballFocused by remember { mutableStateOf(false) }
 
             Box(
                 modifier = Modifier
+                    .tvFocus(shape = CircleShape, focusedScale = 1.1f)
+                    .onFocusChanged { ballFocused = it.isFocused }
                     .size(48.dp)
+                    // 聚焦时球身缩小一圈，让描边和球面之间留出间隙（球色与主题色相同时
+                    // 紧贴的描边会融进球里，看不见）
+                    .then(if (ballFocused) Modifier.padding(3.dp) else Modifier)
                     .clip(CircleShape)
                     .background(Color(color))
                     .clickable { onSelect(color) },
@@ -255,6 +269,7 @@ fun SwitchPref(
     }
     ListItem(
         modifier = Modifier
+            .tvFocus(shape = RoundedCornerShape(12.dp))
             .fillMaxWidth()
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },

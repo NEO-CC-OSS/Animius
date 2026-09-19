@@ -225,6 +225,8 @@ fun VideoPlayer(
     playerState: VideoPlayerState,
     headers: Map<String, String> = emptyMap(),
     lifecycleOwner: LifecycleOwner = LocalLifecycleOwner.current,
+    /** 进入播放器/从后台回来时是否自动唤起控制栏（TV 直控模式传 false） */
+    showControllerOnStart: Boolean = true,
     onBackPress: () -> Unit,
     controller: @Composable () -> Unit,
 ) {
@@ -237,7 +239,8 @@ fun VideoPlayer(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_START -> playerState.showControlUi()
+                Lifecycle.Event.ON_START ->
+                    if (showControllerOnStart) playerState.showControlUi()
                 Lifecycle.Event.ON_STOP -> playerState.player.pause()
                 else -> Unit
             }
@@ -256,7 +259,7 @@ fun VideoPlayer(
         playerState.player.prepare()
         playerState.player.seekTo(videoPosition)
         playerState.player.playWhenReady = true
-        playerState.showControlUi()
+        if (showControllerOnStart) playerState.showControlUi()
     }
 
     BackHandler {

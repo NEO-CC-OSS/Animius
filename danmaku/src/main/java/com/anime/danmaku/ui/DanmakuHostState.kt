@@ -232,7 +232,11 @@ class DanmakuHostState(
 
     /**
      * 清空屏幕并以这些弹幕填充. 常见于快进/快退时
-     * Todo: 将[list] 填充到屏幕.
+     *
+     * [list] 是 session 发出的 seek 目标时间窗内已到期的弹幕（由近到远），
+     * 清屏后立即按顺序尝试上屏，模拟"这些弹幕正在飘"的状态；轨道不足时丢弃
+     * （与正常播放时轨道满丢弹幕的行为一致）。之后的弹幕由 session 的正常
+     * Add 流程继续推发。[playTimeMillis] 为 seek 目标时间，供调用方备用。
      *
      * @param list 顺序为由距离当前时间近到远.
      * @param playTimeMillis 当前播放器的时间
@@ -242,6 +246,7 @@ class DanmakuHostState(
         playTimeMillis: Long = 0L
     ) {
         clearPresentDanmaku()
+        list.forEach { trySend(it) }
     }
 
     /**

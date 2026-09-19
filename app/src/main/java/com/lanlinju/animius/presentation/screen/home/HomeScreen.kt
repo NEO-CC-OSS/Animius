@@ -75,6 +75,7 @@ import com.lanlinju.animius.presentation.component.MediaSmall
 import com.lanlinju.animius.presentation.component.MediaSmallRow
 import com.lanlinju.animius.presentation.component.StateHandler
 import com.lanlinju.animius.presentation.component.TranslucentStatusBarLayout
+import com.lanlinju.animius.presentation.component.tvFocus
 import com.lanlinju.animius.presentation.component.WarningMessage
 import com.lanlinju.animius.util.KEY_HOME_BACKGROUND_URI
 import com.lanlinju.animius.util.KEY_USE_GRID_LAYOUT
@@ -417,6 +418,7 @@ private fun HomeTile(
                     .align(Alignment.BottomStart)
                     .offset(y = 8.dp)
                     .padding(vertical = if (isWideScreen && useGridLayout) 8.dp else 0.dp)
+                    .tvFocus(shape = RoundedCornerShape(8.dp))
                     .run {
                         if (isWideScreen) {
                             // 获取焦点
@@ -522,7 +524,9 @@ private fun LayoutTypeSelector(
                             animationSpec = tween(400),
                             label = "icon_color"
                         ).value,
-                        contentDescription = null,
+                        contentDescription = stringResource(
+                            if (index == 0) Res.string.lbl_video else Res.string.lbl_manga
+                        ),
                     )
                 }
             }

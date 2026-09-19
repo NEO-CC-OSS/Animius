@@ -2,6 +2,7 @@ package com.lanlinju.animius
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -9,6 +10,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.ViewCompat
@@ -67,37 +72,50 @@ class MainActivity : ComponentActivity() {
 private fun App(modifier: Modifier = Modifier) {
     val navController = rememberNavController()
 
+    // TV 键盘/遥控器长按会导致按键重复(KeyDown repeat)，若组件未过滤重复事件，
+    // 一次按压会连发数十次 navigate，把返回栈压满同一路由页——表现为"按返回原地跳转"。
+    // 这里对所有导航统一做 500ms 去抖兜底（人手不可能 500ms 内触发两次同一路由导航，
+    // 手机端行为不受影响）。
+    val lastNavigateTimeMs = remember { mutableLongStateOf(0L) }
+    val navigateDebounced: (Any) -> Unit = { route ->
+        val now = SystemClock.uptimeMillis()
+        if (now - lastNavigateTimeMs.longValue >= 500) {
+            lastNavigateTimeMs.longValue = now
+            navController.navigate(route)
+        }
+    }
+
     AnimeNavHost(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
         navController = navController,
         onNavigateToAnimeDetail = { detailUrl, mode ->
-            navController.navigate(route = Screen.AnimeDetail(detailUrl, mode))
+            navigateDebounced(Screen.AnimeDetail(detailUrl, mode))
         },
         onNavigateToVideoPlay = { parameters ->
-            navController.navigate(Screen.VideoPlayer(parameters))
+            navigateDebounced(Screen.VideoPlayer(parameters))
         },
         onBackClick = {
             navController.popBackStack()
         },
         onNavigateToHistory = {
-            navController.navigate(Screen.HistoryScreen)
+            navigateDebounced(Screen.HistoryScreen)
         },
         onNavigateToDownload = {
-            navController.navigate(Screen.Download)
+            navigateDebounced(Screen.Download)
         },
         onNavigateToDownloadDetail = { detailUrl, title ->
-            navController.navigate(Screen.DownloadDetail(detailUrl, title))
+            navigateDebounced(Screen.DownloadDetail(detailUrl, title))
         },
         onNavigateToSearch = {
-            navController.navigate(Screen.Search)
+            navigateDebounced(Screen.Search)
         },
         onNavigateToAppearance = {
-            navController.navigate(Screen.Appearance)
+            navigateDebounced(Screen.Appearance)
         },
         onNavigateToDanmakuSettings = {
-            navController.navigate(Screen.DanmakuSettings)
+            navigateDebounced(Screen.DanmakuSettings)
         },
     )
 }

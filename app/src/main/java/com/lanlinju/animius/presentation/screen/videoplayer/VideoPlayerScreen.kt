@@ -78,8 +78,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -90,10 +92,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEvent
+import android.view.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
@@ -125,6 +125,7 @@ import com.lanlinju.animius.domain.model.Episode
 import com.lanlinju.animius.domain.model.Video
 import com.lanlinju.animius.presentation.component.Forward85
 import com.lanlinju.animius.presentation.component.StateHandler
+import com.lanlinju.animius.presentation.component.tvFocus
 import com.lanlinju.animius.presentation.screen.settings.DanmakuConfigData
 import com.lanlinju.animius.presentation.theme.AnimeTheme
 import com.lanlinju.animius.presentation.theme.padding
@@ -189,6 +190,33 @@ fun VideoPlayScreen(
         resource.data?.let { video ->
 
             val playerState = rememberVideoPlayerState(isAutoOrientation = isAutoOrientation)
+            val context = LocalContext.current
+            val isTv = remember { isAndroidTV(context) }
+            val containerFocusRequester = remember { FocusRequester() }
+            val playPauseFocusRequester = remember { FocusRequester() }
+
+            // TV 焦点闭环：控制栏显示 → 焦点给「播放/暂停」按钮；控制栏与所有侧边
+            // 面板（选集/倍速/比例）都关闭 → 焦点还给容器回到直控模式。面板打开期间
+            // 不抢焦点（面板自身会把焦点交给选中项）
+            LaunchedEffect(
+                playerState.isControlUiVisible.value,
+                playerState.isEpisodeUiVisible.value,
+                playerState.isSpeedUiVisible.value,
+                playerState.isResizeUiVisible.value
+            ) {
+                if (!isTv) return@LaunchedEffect
+                withFrameNanos { }
+                runCatching {
+                    val anyPanelOpen = playerState.isEpisodeUiVisible.value ||
+                        playerState.isSpeedUiVisible.value ||
+                        playerState.isResizeUiVisible.value
+                    when {
+                        playerState.isControlUiVisible.value ->
+                            playPauseFocusRequester.requestFocus()
+                        !anyPanelOpen -> containerFocusRequester.requestFocus()
+                    }
+                }
+            }
 
             Box(
                 modifier = Modifier
@@ -204,12 +232,27 @@ fun VideoPlayScreen(
                     videoPosition = video.lastPlayPosition,
                     playerState = playerState,
                     headers = video.headers,
+                    // TV 直控模式：进播放器不自动唤起控制栏（用户要求），手机端保持原行为
+                    showControllerOnStart = !isTv,
                     onBackPress = { handleBackPress(playerState, onBackClick, view, activity) },
                     modifier = Modifier
+                        .focusRequester(containerFocusRequester)
                         .focusable()
-                        .defaultRemoteControlHandler(
+                        .tvRemoteControlHandler(
                             playerState = playerState,
-                            onNextClick = { viewModel.playNextEpisode(playerState.player.currentPosition) }
+                            onNextClick = { viewModel.playNextEpisode(playerState.player.currentPosition) },
+                            onPrevClick = {
+                                video.episodes.getOrNull(video.currentEpisodeIndex - 1)?.let { prev ->
+                                    playerState.control.pause()
+                                    playerState.setLoading(true)
+                                    viewModel.getVideo(
+                                        prev.url,
+                                        prev.name,
+                                        video.currentEpisodeIndex - 1,
+                                        playerState.player.currentPosition
+                                    )
+                                }
+                            }
                         )
                 ) {
                     VideoPlayerControl(
@@ -230,7 +273,8 @@ fun VideoPlayScreen(
                                 onForwardClick = { playerState.control.skip(85000) }
                             )
                         },
-                        onDanmakuClick = { viewModel.setEnabledDanmaku(it) }
+                        onDanmakuClick = { viewModel.setEnabledDanmaku(it) },
+                        playPauseFocusRequester = if (isTv) playPauseFocusRequester else null
                     )
                 }
 
@@ -281,6 +325,10 @@ private fun ShowLoadingPage() {
 // Failure screen composable
 @Composable
 private fun ShowFailurePage(viewModel: VideoPlayerViewModel, onBackClick: () -> Unit) {
+    val context = LocalContext.current
+    val isTv = remember { isAndroidTV(context) }
+    val retryFocusRequester = remember { FocusRequester() }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -300,16 +348,31 @@ private fun ShowFailurePage(viewModel: VideoPlayerViewModel, onBackClick: () -> 
             style = MaterialTheme.typography.bodyMedium
         )
         Spacer(modifier = Modifier.padding(vertical = 8.dp))
-        OutlinedButton(onClick = onBackClick) {
+        OutlinedButton(
+            onClick = onBackClick,
+            modifier = Modifier.tvFocus(shape = CircleShape)
+        ) {
             Text(text = stringResource(id = R.string.back), color = Color.White)
         }
         Spacer(modifier = Modifier.padding(vertical = 8.dp))
-        OutlinedButton(onClick = { viewModel.retry() }) {
+        OutlinedButton(
+            onClick = { viewModel.retry() },
+            modifier = Modifier
+                .focusRequester(retryFocusRequester)
+                .tvFocus(shape = CircleShape)
+        ) {
             Text(
                 text = stringResource(id = R.string.retry),
                 color = MaterialTheme.colorScheme.primary
             )
         }
+    }
+
+    // TV 上主动把焦点给「重试」，否则出错页是焦点死区（P0-3）
+    LaunchedEffect(isTv) {
+        if (!isTv) return@LaunchedEffect
+        withFrameNanos { }
+        runCatching { retryFocusRequester.requestFocus() }
     }
 }
 
@@ -320,6 +383,12 @@ private fun handleBackPress(
     view: View,
     activity: Activity
 ) {
+    // TV：控制栏显示时返回只收起控制栏（总表"返回=逐层退出"），再按一次才退出播放器。
+    // 手机/平板保持原行为不变
+    if (isAndroidTV(activity) && playerState.isControlUiVisible.value) {
+        playerState.hideControlUi()
+        return
+    }
     // 由于在竖屏模式下返回会导致SystemBars的Padding丢失，所以调用hideSystemBars()临时解决
     if (!playerState.isFullscreen.value) {
         hideSystemBars(view, activity)
@@ -370,54 +439,100 @@ private fun DanmakuHost(
                     )
                 }
                 // 快进/快退
-                is DanmakuEvent.Repopulate -> danmakuHostState.repopulate()
+                is DanmakuEvent.Repopulate -> danmakuHostState.repopulate(
+                    // 把 session 发来的目标时间窗内已到期弹幕补上屏（C-4：原来只清空不回填）
+                    list = danmakuEvent.list.map { DanmakuPresentation(it, false) },
+                    playTimeMillis = danmakuEvent.playTimeMillis
+                )
             }
         }
     }
 }
 
-private fun Modifier.defaultRemoteControlHandler(
+/**
+ * TV 播放器双模式按键（方案 §3 总表 + §5 层次 B）：
+ * - 控制栏隐藏＝直控模式：确定/空格播放暂停、左右快退快进 15s、上下/菜单键唤起控制栏、返回退出
+ * - 控制栏显示＝焦点导航模式：方向键一律放行给焦点系统（修 P0-1 容器吞键），
+ *   确定由焦点按钮自身激活；切集只走显式按钮与媒体键（修 P1-3 下键误触跳集）
+ * - 媒体键（MEDIA_PLAY_PAUSE/NEXT/PREVIOUS）双模式并行生效
+ * 仅 TV 挂载，手机/平板保持原样不挂任何按键处理。
+ */
+private fun Modifier.tvRemoteControlHandler(
     playerState: VideoPlayerState,
     onNextClick: () -> Unit = {},
-) = onKeyEvent { keyEvent: KeyEvent ->
-    if (keyEvent.type == KeyEventType.KeyDown)
-        when (keyEvent.key) {
-            Key.DirectionLeft -> {
-                playerState.showControlUi()
-                playerState.control.rewind()
-                true
-            }
-
-            Key.DirectionRight -> {
-                playerState.showControlUi()
-                playerState.control.forward()
-                true
-            }
-
-            Key.DirectionUp -> {
-                playerState.showEpisodeUi()
-                true
-            }
-
-            Key.DirectionDown -> {
-                playerState.showControlUi()
-                onNextClick()
-                true
-            }
-
-            Key.DirectionCenter, Key.Spacebar -> {
-                if (playerState.isPlaying.value) {
-                    playerState.showControlUi()
-                    playerState.control.pause()
-                } else {
-                    playerState.control.play()
+    onPrevClick: () -> Unit = {},
+): Modifier = composed {
+    val context = LocalContext.current
+    val isTv = remember { isAndroidTV(context) }
+    if (!isTv) {
+        this
+    } else {
+        this.onKeyEvent { keyEvent ->
+            if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
+            val keyCode = keyEvent.nativeKeyEvent.keyCode
+            when {
+                keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                    if (playerState.isPlaying.value) {
+                        playerState.control.pause()
+                    } else {
+                        playerState.control.play()
+                    }
+                    true
                 }
-                true
-            }
 
-            else -> false
-        } else {
-        false
+                keyCode == KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                    playerState.control.pause()
+                    playerState.setLoading(true)
+                    onNextClick()
+                    true
+                }
+
+                keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                    onPrevClick()
+                    true
+                }
+
+                // 焦点导航模式：方向键/确定都交给焦点系统与按钮自身
+                playerState.isControlUiVisible.value -> false
+
+                keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    playerState.control.rewind()
+                    true
+                }
+
+                keyCode == KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    playerState.control.forward()
+                    true
+                }
+
+                keyCode == KeyEvent.KEYCODE_DPAD_UP -> {
+                    // 上键 = 从右侧拉出选集面板（用户要求恢复 v1.3.5 行为），
+                    // 面板打开时自身会隐藏控制栏并把焦点交给选中集
+                    playerState.showEpisodeUi()
+                    true
+                }
+
+                keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
+                    keyCode == KeyEvent.KEYCODE_MENU -> {
+                    playerState.showControlUi()
+                    true
+                }
+
+                keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+                    keyCode == KeyEvent.KEYCODE_ENTER ||
+                    keyCode == KeyEvent.KEYCODE_SPACE -> {
+                    if (playerState.isPlaying.value) {
+                        playerState.showControlUi()
+                        playerState.control.pause()
+                    } else {
+                        playerState.control.play()
+                    }
+                    true
+                }
+
+                else -> false
+            }
+        }
     }
 }
 
@@ -430,18 +545,24 @@ private fun OptionsContent(
 ) {
     var expanded by remember { mutableStateOf(false) }
     Row {
-        IconButton(onClick = onForwardClick) {
+        IconButton(
+            modifier = Modifier.tvFocus(shape = CircleShape),
+            onClick = onForwardClick
+        ) {
             Icon(
                 imageVector = Icons.Rounded.Forward85,
-                contentDescription = "Forward 85s"
+                contentDescription = stringResource(id = R.string.forward_85s)
             )
         }
 
         Box {
-            IconButton(onClick = { expanded = true }) {
+            IconButton(
+                modifier = Modifier.tvFocus(shape = CircleShape),
+                onClick = { expanded = true }
+            ) {
                 Icon(
                     imageVector = Icons.Rounded.MoreVert,
-                    contentDescription = null
+                    contentDescription = stringResource(id = R.string.more)
                 )
             }
 
@@ -810,17 +931,20 @@ private fun ShowVideoMessage(text: String, onRetryClick: (() -> Unit)? = null) {
                         alpha = 0.3f
                     ) else Color.Unspecified
                 ),
+                // 切勿再手挂 focusable：Button 内部 clickable 本身就是焦点目标，
+                // 外层重复挂会造出"只有焦点没有点击"的第二个节点，吞掉第一下确定（P1-5 同款）
                 modifier = Modifier
                     .focusRequester(focusRequester)
-                    .focusable(),
+                    .tvFocus(shape = CircleShape),
                 onClick = it
             ) {
                 Text(text = stringResource(id = R.string.retry))
             }
 
-            LaunchedEffect(Unit) {
+            LaunchedEffect(isAndroidTV) {
                 if (isAndroidTV) {
-                    focusRequester.requestFocus()
+                    withFrameNanos { }
+                    runCatching { focusRequester.requestFocus() }
                 }
             }
         }
@@ -860,6 +984,8 @@ private fun VideoSideSheet(
 
     if (playerState.isEpisodeUiVisible.value) {
         var selectedEpisodeIndex by remember(video.currentEpisodeIndex) { mutableIntStateOf(video.currentEpisodeIndex) }
+        val context = LocalContext.current
+        val isTv = remember { isAndroidTV(context) }
         EpisodeSideSheet(
             episodes = video.episodes,
             selectedEpisodeIndex = selectedEpisodeIndex,
@@ -868,6 +994,8 @@ private fun VideoSideSheet(
                 playerState.setLoading(true)
                 viewModel.cancelAutoContinuePlay()
                 selectedEpisodeIndex = index
+                // TV：换集后自动收起选集面板，焦点闭环会把焦点还给画面回到直控
+                if (isTv) playerState.hideEpisodeUi()
                 viewModel.getVideo(
                     episode.url,
                     episode.name,
@@ -949,7 +1077,6 @@ private fun EpisodeSideSheet(
         ) {
             itemsIndexed(episodes) { index, episode ->
                 val focusRequester = remember { FocusRequester() }
-                var isFocused by remember { mutableStateOf(false) }
                 val selected = index == selectedEpisodeIndex
 
                 OutlinedButton(
@@ -961,11 +1088,12 @@ private fun EpisodeSideSheet(
                         if (selected) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.outline.copy(0.5f)
                     ),
+                    // 切勿再手挂 focusable：Button 内部 clickable 就是焦点目标，重复挂
+                    // 会造成双焦点目标吞掉第一下确定（P1-5 同款）；焦点可见性交给 tvFocus
                     modifier = Modifier
                         .fillMaxWidth()
-                        .onFocusChanged(onFocusChanged = { isFocused = it.isFocused })
+                        .tvFocus(shape = RoundedCornerShape(4.dp))
                         .focusRequester(focusRequester)
-                        .focusable()
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         if (selected) {
