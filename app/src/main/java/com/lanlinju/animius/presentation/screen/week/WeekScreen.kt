@@ -99,6 +99,7 @@ import com.lanlinju.animius.util.GITHUB_RELEASE_ADDRESS
 import com.lanlinju.animius.util.KEY_AUTO_ORIENTATION_ENABLED
 import com.lanlinju.animius.util.KEY_IS_AUTO_CHECK_UPDATE
 import com.lanlinju.animius.util.KEY_SOURCE_MODE
+import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.KEY_USE_DOWNLOAD_DIRECTORY
 import com.lanlinju.animius.util.SourceHolder
 import com.lanlinju.animius.util.SourceHolder.DEFAULT_ANIME_SOURCE
@@ -269,9 +270,15 @@ fun WeekList(
     val itemRequesters = remember { mutableMapOf<Int, FocusRequester>() }
     LaunchedEffect(Unit) {
         delay(250) // 等 grid 完成首帧组合，requester 才有附着节点
-        if (lastFocusedIndex.intValue > 0) { // index 0 是默认落点附近，无需干预
-            itemRequesters[lastFocusedIndex.intValue]
-                ?.let { runCatching { it.requestFocus() } }
+        val saved = lastFocusedIndex.intValue
+        val requester = itemRequesters[saved]
+        "week saved=$saved mapSize=${itemRequesters.size} requester=${requester != null}".log("FocusRestore")
+        if (saved > 0) {
+            requester?.let {
+                runCatching { it.requestFocus() }
+                    .onFailure { e -> "week requestFocus失败: $e".log("FocusRestore") }
+                    .onSuccess { "week requestFocus成功 -> index=$saved".log("FocusRestore") }
+            }
         }
     }
 

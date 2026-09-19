@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -39,6 +40,8 @@ import com.lanlinju.animius.R as Res
 @Composable
 fun <T> MediaSmallRow(
     mediaList: List<T>,
+    // contentIndexed 为可选变体；content 必须保持最后一个参数，详情页等调用方使用尾随 lambda
+    contentIndexed: @Composable ((Int, T) -> Unit)? = null,
     content: @Composable (T) -> Unit
 ) {
     LazyRow(
@@ -48,8 +51,10 @@ fun <T> MediaSmallRow(
             end = dimensionResource(Res.dimen.large_padding)
         )
     ) {
-        items(mediaList) { media ->
-            content(media)
+        if (contentIndexed != null) {
+            itemsIndexed(mediaList) { index, media -> contentIndexed(index, media) }
+        } else {
+            items(mediaList) { media -> content(media) }
         }
     }
 }

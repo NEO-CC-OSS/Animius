@@ -45,6 +45,7 @@ import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -84,6 +85,7 @@ import com.lanlinju.animius.presentation.component.MediaSmallRow
 import com.lanlinju.animius.presentation.component.StateHandler
 import com.lanlinju.animius.presentation.component.TranslucentStatusBarLayout
 import com.lanlinju.animius.presentation.component.tvFocus
+import com.lanlinju.animius.util.log
 import com.lanlinju.animius.presentation.component.WarningMessage
 import com.lanlinju.animius.util.KEY_HOME_BACKGROUND_URI
 import com.lanlinju.animius.util.KEY_USE_GRID_LAYOUT
@@ -200,10 +202,34 @@ private fun HomeContent(
                     onItemClick = onItemClick
                 )
             } else {
-                data.forEach { home ->
+                // TV 焦点恢复（默认布局）：记录最后聚焦的行/卡片，从详情页返回时恢复
+                // （focusRestorer 只管焦点在页内区块间往返，跨导航返回必须手动 requestFocus）
+                val lastFocusedRow = rememberSaveable { mutableIntStateOf(-1) }
+                val lastFocusedItem = rememberSaveable { mutableIntStateOf(-1) }
+                val itemRequesters = remember { mutableMapOf<Long, FocusRequester>() }
+                LaunchedEffect(Unit) {
+                    delay(250) // 等列表完成首帧组合，requester 才有附着节点
+                    val row = lastFocusedRow.intValue
+                    val item = lastFocusedItem.intValue
+                    val requester = itemRequesters[row * 100000L + item]
+                    "home-default row=$row item=$item mapSize=${itemRequesters.size} requester=${requester != null}"
+                        .log("FocusRestore")
+                    if (row > 0 || item > 0) { // (0,0) 是默认落点附近，无需干预
+                        requester?.let {
+                            runCatching { it.requestFocus() }
+                                .onFailure { e -> "home-default requestFocus失败: $e".log("FocusRestore") }
+                                .onSuccess { "home-default requestFocus成功 row=$row item=$item".log("FocusRestore") }
+                        }
+                    }
+                }
+                data.forEachIndexed { rowIndex, home ->
                     HomeRow(
                         list = home.animeList,
                         title = home.title,
+                        rowIndex = rowIndex,
+                        lastFocusedRow = lastFocusedRow,
+                        lastFocusedItem = lastFocusedItem,
+                        itemRequesters = itemRequesters,
                         onItemClicked = onItemClick
                     )
                 }
@@ -258,9 +284,16 @@ private fun GridLayoutTabs(
         val itemRequesters = remember { mutableMapOf<Int, FocusRequester>() }
         LaunchedEffect(Unit) {
             delay(250) // 等 grid 完成首帧组合，requester 才有附着节点
-            if (lastFocusedIndex.intValue > 0) { // index 0 是默认落点附近，无需干预
-                itemRequesters[lastFocusedIndex.intValue]
-                    ?.let { runCatching { it.requestFocus() } }
+            val saved = lastFocusedIndex.intValue
+            val requester = itemRequesters[saved]
+            "home page=$page saved=$saved mapSize=${itemRequesters.size} requester=${requester != null}"
+                .log("FocusRestore")
+            if (saved > 0) { // index 0 是默认落点附近，无需干预
+                requester?.let {
+                    runCatching { it.requestFocus() }
+                        .onFailure { e -> "home requestFocus失败: $e".log("FocusRestore") }
+                        .onSuccess { "home requestFocus成功 -> index=$saved".log("FocusRestore") }
+                }
             }
         }
         LazyVerticalGrid(
@@ -280,7 +313,12 @@ private fun GridLayoutTabs(
                     onClick = { onItemClick(homeItem) },
                     modifier = Modifier
                         .focusRequester(itemRequester)
-                        .onFocusChanged { if (it.isFocused) lastFocusedIndex.intValue = index }
+                        .onFocusChanged {
+                            if (it.isFocused) {
+                                lastFocusedIndex.intValue = index
+                                "home 记录聚焦 index=$index".log("FocusRestore")
+                            }
+                        }
                         .width(dimensionResource(Res.dimen.media_card_width))
                 )
             }
@@ -469,6 +507,10 @@ private fun HomeTile(
 fun HomeRow(
     list: List<Anime?>,
     title: String,
+    rowIndex: Int,
+    lastFocusedRow: MutableState<Int>,
+    lastFocusedItem: MutableState<Int>,
+    itemRequesters: MutableMap<Long, FocusRequester>,
     onItemClicked: (Anime) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -493,6 +535,27 @@ fun HomeRow(
                         onItemClicked(homeItem!!)
                     },
                     modifier = Modifier.width(dimensionResource(Res.dimen.media_card_width))
+                )
+            },
+            contentIndexed = { index, homeItem ->
+                val itemRequester = remember(index) { FocusRequester() }
+                SideEffect { itemRequesters[rowIndex * 100000L + index] = itemRequester }
+                MediaSmall(
+                    image = homeItem?.img,
+                    label = homeItem?.title,
+                    onClick = {
+                        onItemClicked(homeItem!!)
+                    },
+                    modifier = Modifier
+                        .focusRequester(itemRequester)
+                        .onFocusChanged {
+                            if (it.isFocused) {
+                                lastFocusedRow.value = rowIndex
+                                lastFocusedItem.value = index
+                                "home-default 记录 row=$rowIndex item=$index".log("FocusRestore")
+                            }
+                        }
+                        .width(dimensionResource(Res.dimen.media_card_width))
                 )
             }
         )
