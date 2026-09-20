@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -68,6 +69,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
@@ -207,6 +209,8 @@ fun WeekScreen(
                         weekDataMap[page]?.let { list ->
                             WeekList(
                                 list = list,
+                                page = page,
+                                pagerState = pagerState,
                                 onItemClicked = {
                                     onNavigateToAnimeDetail(
                                         it.detailUrl,
@@ -245,6 +249,8 @@ fun WeekScreen(
 @Composable
 fun WeekList(
     list: List<Anime>,
+    page: Int,
+    pagerState: PagerState,
     onItemClicked: (Anime) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -270,9 +276,12 @@ fun WeekList(
     val itemRequesters = remember { mutableMapOf<Int, FocusRequester>() }
     LaunchedEffect(Unit) {
         delay(250) // 等 grid 完成首帧组合，requester 才有附着节点
+        // 邻页（beyondViewportPageCount）也保持组合，多页同时恢复会互相抢焦点；
+        // 只允许「本页是当前显示页」时恢复
+        if (pagerState.currentPage != page) return@LaunchedEffect
         val saved = lastFocusedIndex.intValue
         val requester = itemRequesters[saved]
-        "week saved=$saved mapSize=${itemRequesters.size} requester=${requester != null}".log("FocusRestore")
+        "week page=$page saved=$saved mapSize=${itemRequesters.size} requester=${requester != null}".log("FocusRestore")
         if (saved > 0) {
             requester?.let {
                 runCatching { it.requestFocus() }
@@ -283,8 +292,15 @@ fun WeekList(
     }
 
     LazyVerticalGrid(
-        // 返回本页时恢复离开前聚焦的条目（容器级焦点恢复，不新增可聚焦目标）
-        modifier = modifier.fillMaxSize().focusRestorer(),
+        // 返回本页时恢复离开前聚焦的条目（容器级焦点恢复，不新增可聚焦目标）；
+        // 左右边界卡住，防止焦点跳进 HorizontalPager 邻页的封面（切星期走上方 Tab 行）
+        modifier = modifier
+            .fillMaxSize()
+            .focusRestorer()
+            .focusProperties {
+                left = FocusRequester.Cancel
+                right = FocusRequester.Cancel
+            },
         columns = columns,
         verticalArrangement = Arrangement.spacedBy(8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),

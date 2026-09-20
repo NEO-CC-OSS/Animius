@@ -20,6 +20,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
@@ -49,7 +51,12 @@ fun <T> MediaSmallRow(
         contentPadding = PaddingValues(
             start = dimensionResource(Res.dimen.large_padding),
             end = dimensionResource(Res.dimen.large_padding)
-        )
+        ),
+        // TV：行内左右到边界就卡住，防止焦点跳进 HorizontalPager 邻页的行（换行用上下键）
+        modifier = Modifier.focusProperties {
+            left = FocusRequester.Cancel
+            right = FocusRequester.Cancel
+        }
     ) {
         if (contentIndexed != null) {
             itemsIndexed(mediaList) { index, media -> contentIndexed(index, media) }

@@ -58,6 +58,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
@@ -284,21 +285,30 @@ private fun GridLayoutTabs(
         val itemRequesters = remember { mutableMapOf<Int, FocusRequester>() }
         LaunchedEffect(Unit) {
             delay(250) // 等 grid 完成首帧组合，requester 才有附着节点
+            // 邻页也保持组合，多页同时恢复会互相抢焦点；只允许本页是当前显示页时恢复
+            if (pagerState.currentPage != page) return@LaunchedEffect
             val saved = lastFocusedIndex.intValue
             val requester = itemRequesters[saved]
-            "home page=$page saved=$saved mapSize=${itemRequesters.size} requester=${requester != null}"
+            "home-grid page=$page saved=$saved mapSize=${itemRequesters.size} requester=${requester != null}"
                 .log("FocusRestore")
             if (saved > 0) { // index 0 是默认落点附近，无需干预
                 requester?.let {
                     runCatching { it.requestFocus() }
-                        .onFailure { e -> "home requestFocus失败: $e".log("FocusRestore") }
-                        .onSuccess { "home requestFocus成功 -> index=$saved".log("FocusRestore") }
+                        .onFailure { e -> "home-grid requestFocus失败: $e".log("FocusRestore") }
+                        .onSuccess { "home-grid requestFocus成功 -> index=$saved".log("FocusRestore") }
                 }
             }
         }
         LazyVerticalGrid(
-            // 返回本页时恢复离开前聚焦的卡片（容器级焦点恢复，不新增可聚焦目标）
-            modifier = Modifier.fillMaxSize().focusRestorer(),
+            // 返回本页时恢复离开前聚焦的卡片（容器级焦点恢复，不新增可聚焦目标）；
+            // 左右边界卡住，防止焦点跳进 HorizontalPager 邻页（切 Tab 走上方 Tab 行）
+            modifier = Modifier
+                .fillMaxSize()
+                .focusRestorer()
+                .focusProperties {
+                    left = FocusRequester.Cancel
+                    right = FocusRequester.Cancel
+                },
             columns = columns,
             verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
