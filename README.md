@@ -11,8 +11,6 @@
 - 弹幕：加载失败原因可见（鉴权失败/未匹配/网络错误分类提示）、集数匹配增强
 - 封面加载：统一 ImageLoader（共享证书补全 + UA + 磁盘缓存）
 
-**关于弹幕凭证**：源码不含 AppId/AppSecret。需要弹幕功能请自行在弹弹play 开放平台（dev.dandanplay.com）申请，在仓库根目录 `local.properties`（不进 git）中加两行：`dandanplayAppId=你的AppId` / `dandanplayAppSecret=你的AppSecret`，然后构建。
-
 **自行构建**：JDK 17 + Android SDK，`./gradlew :app:assembleDebug`。本项目仅供学习交流，弹幕功能免费，无任何商业用途。
 
 ---
