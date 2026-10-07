@@ -1,3 +1,24 @@
+# Animius TV版
+
+> 本仓库是 [lanlinju/Animius](https://github.com/lanlinju/Animius)（v1.3.5，GPL v3）的 TV 设备定制版，
+> 经原作者同意开源，并允许使用「Animius TV版」名称（原作者 2026-10-07 回信许可）。
+
+**相对上游的主要改动**（详见提交历史）：
+
+- TV 端全局焦点体系（主题色描边）与遥控器适配、播放器"直控/焦点"双模式、长按 2 秒上下文操作
+- 失效数据源清理（域名易主/停摆/SPA 化的 5 个源）
+- HTTPS 证书链补全（TlsChainFix，公共 CA 严格校验）
+- 弹幕：加载失败原因可见（鉴权失败/未匹配/网络错误分类提示）、集数匹配增强
+- 封面加载：统一 ImageLoader（共享证书补全 + UA + 磁盘缓存）
+
+**关于弹幕凭证**：源码不含 AppId/AppSecret。需要弹幕功能请自行在弹弹play 开放平台（dev.dandanplay.com）申请，在仓库根目录 `local.properties`（不进 git）中加两行：`dandanplayAppId=你的AppId` / `dandanplayAppSecret=你的AppSecret`，然后构建。
+
+**自行构建**：JDK 17 + Android SDK，`./gradlew :app:assembleDebug`。本项目仅供学习交流，弹幕功能免费，无任何商业用途。
+
+---
+
+（以下为上游原 README）
+
 # Animius
 
 一个简洁的播放动漫的App，支持下载，弹幕，多数据源等功能，使用[Jetpack Compose](https://developer.android.com/jetpack?hl=zh-cn)
