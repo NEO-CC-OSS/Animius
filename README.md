@@ -1,7 +1,7 @@
 # Animius TV版
 
 > 本仓库是 [lanlinju/Animius](https://github.com/lanlinju/Animius)（v1.3.5，GPL v3）的 TV 设备定制版，
-> 经原作者同意开源，并允许使用「Animius TV版」名称。
+> 经原作者同意开源，并允许使用「Animius TV版」名称。感谢原作者 [Lanlinju](https://github.com/lanlinju) 的开源工作。
 
 **相对上游的主要改动**（详见提交历史）：
 
