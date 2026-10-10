@@ -23,6 +23,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # 显式指定包列表：旧默认值含 'tools'，该包已从 Google 仓库移除，
+          # 会导致 sdkmanager "Failed to find package 'tools'" 退出（2026-10-10 实测）
+          packages: 'platform-tools'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
