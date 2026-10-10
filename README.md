@@ -26,9 +26,8 @@
 
 ## 如何下载安装
 
-点击此链接[下载地址](https://github.com/Lanlinju/Anime/releases/latest)
-前往下载页面，然后选择下载以`.apk`结尾的文件。Android
-TV或者系统版本低于安卓8.0的，请点击查看[这里](https://github.com/lanlinju/Anime/releases/tag/v1.2.1)
+点击此链接[下载地址](https://github.com/NEO-CC-OSS/Animius/releases/latest)
+前往下载页面，然后选择下载以`.apk`结尾的文件（单包支持全部架构，Android TV / Android 8.0+ 均可安装）。
 
 ## 应用截图
 

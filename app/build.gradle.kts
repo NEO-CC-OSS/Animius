@@ -18,8 +18,8 @@ android {
         applicationId = "com.lanlinju.animius"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = compileSdk
-        versionCode = 36
-        versionName = "1.3.5-tv.1"
+        versionCode = 37
+        versionName = "1.3.5-tv.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
