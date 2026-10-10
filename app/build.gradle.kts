@@ -19,7 +19,7 @@ android {
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = compileSdk
         versionCode = 36
-        versionName = "1.3.5"
+        versionName = "1.3.5-tv.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

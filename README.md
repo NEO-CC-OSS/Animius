@@ -11,6 +11,8 @@
 - 弹幕：加载失败原因可见（鉴权失败/未匹配/网络错误分类提示）、集数匹配增强
 - 封面加载：统一 ImageLoader（共享证书补全 + UA + 磁盘缓存）
 
+**数据来源**：弹幕数据来自 [弹弹play开放弹幕网络](https://www.dandanplay.com)。
+
 **自行构建**：JDK 17 + Android SDK，`./gradlew :app:assembleDebug`。本项目仅供学习交流，弹幕功能免费，无任何商业用途。
 
 ---
@@ -72,7 +74,7 @@ Architecture
 
 ## 参考来源
 
-视频弹幕源来自于[弹弹play](https://www.dandanplay.com)开放API
+视频弹幕来自[弹弹play开放弹幕网络](https://www.dandanplay.com)
 
 - [SakuraAnime](https://github.com/670848654/SakuraAnime)：樱花动漫网站数据解析参考实现来源
 - [Animite](https://github.com/imashnake0/Animite)：应用UI设计参考实现来源
