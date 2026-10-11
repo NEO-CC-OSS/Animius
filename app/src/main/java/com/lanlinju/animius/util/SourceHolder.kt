@@ -27,7 +27,7 @@ object SourceHolder {
     /**
      * 默认动漫源
      */
-    val DEFAULT_ANIME_SOURCE = SourceMode.Silisili
+    val DEFAULT_ANIME_SOURCE = SourceMode.Skr
 
     val currentSource: AnimeSource
         get() = _currentSource
@@ -89,12 +89,13 @@ object SourceHolder {
 }
 
 enum class SourceMode {
+    // 2026-10-11 樱之空实测全绿、更新最快，设为默认源并置顶列表（用户拍板）
+    Skr,
     Silisili,
     Agedm,
     Girigiri,
     // Cycanime,
     Gugufan,
-    Skr,
     Jzacg,
     // Mxdm,
     // Xifan,
