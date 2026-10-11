@@ -51,9 +51,11 @@ class SkrSource : AnimeSource {
         return homeBeanList
     }
 
-    /** 首页/时间表共用的条目结构：a.vodlist_thumb（封面在 data-original、标题在 alt）+ titbox 标题 */
+    /** 首页/时间表/相关推荐共用的条目结构：封面在 a 的 data-original、标题在 alt 与 titbox（周表区块的 a 是 ranklist_thumb） */
     private fun parseVodlistItem(item: Element): AnimeBean? {
-        val a = item.selectFirst("a.vodlist_thumb") ?: return null
+        val a = item.selectFirst("a.vodlist_thumb")
+            ?: item.selectFirst("a.ranklist_thumb")
+            ?: return null
         val url = a.attr("href")
         if (!url.contains("/voddetail/")) return null
         val title = item.select("div.vodlist_titbox p.vodlist_title a").text()
@@ -66,20 +68,25 @@ class SkrSource : AnimeSource {
     }
 
     override suspend fun getWeekData(): Map<Int, List<AnimeBean>> {
+        // 实测结构（2026-10-11 取证）：ul.vodlist_sjb 包在 div.vodlist_smt 内，归属由其前兄弟
+        // div.pannel_head 内 h2.title 文本（周一..周日）决定。day1 的 id 挂在 <body> 上、"上季完结"
+        // 区块无星期，均不能按 id 或 DOM 顺序假设，故按标题文本映射
         val document = getDocument(fullUrl("/vodtype/22/"))
         val weekMap = mutableMapOf<Int, List<AnimeBean>>()
-        // 每天区块 div.pannel_head#dayN + 紧随的 ul.vodlist_sjb：N=1..6 对应周一..周六，N=0 为周日（排 index 6），
-        // 其余（day8=上季完结）跳过。按 id 值映射而非 DOM 顺序，避免顺序假设踩空
-        document.select("div.pannel_head[id^=day]").forEach { head ->
-            val n = head.id().removePrefix("day").toIntOrNull() ?: return@forEach
-            if (n != 0 && n !in 1..6) return@forEach
-            val weekIndex = if (n == 0) 6 else n - 1
-            val listEl = generateSequence(head.nextElementSibling()) { it.nextElementSibling() }
-                .firstOrNull { it.tagName() == "ul" && it.hasClass("vodlist_sjb") }
-            val animes = listEl?.select("li.vodlist_item")?.mapNotNull { parseVodlistItem(it) } ?: emptyList()
+        document.select("ul.vodlist_sjb").forEach { ul ->
+            val weekIndex = weekIndexOf(ul) ?: return@forEach
+            val animes = ul.select("li.vodlist_item").mapNotNull { parseVodlistItem(it) }
             if (animes.isNotEmpty()) weekMap[weekIndex] = animes
         }
         return weekMap
+    }
+
+    private fun weekIndexOf(ul: Element): Int? {
+        val anchor = ul.parent() ?: ul
+        val head = generateSequence(anchor.previousElementSibling()) { it.previousElementSibling() }
+            .firstOrNull { it.hasClass("pannel_head") }
+        val label = head?.selectFirst("h2.title")?.text()?.trim()
+        return WEEK_LABEL_INDEX[label]
     }
 
     override suspend fun getSearchData(query: String, page: Int): List<AnimeBean> {
@@ -109,12 +116,22 @@ class SkrSource : AnimeSource {
             .filter { it.isNotEmpty() && !it.contains("：") }
             .distinct()
             .take(6)
+        // 相关推荐/猜你喜欢：div.container_d.pannel 内 h3.title 文本匹配 + 兄弟 ul.vodlist_sh（实测 2026-10-11）
+        val relatedAnimes = document.select("div.container_d.pannel")
+            .filter { panel ->
+                val heading = panel.selectFirst("h3.title")?.text().orEmpty()
+                heading.contains("相关推荐") || heading.contains("猜你喜欢")
+            }
+            .flatMap { panel ->
+                panel.select("ul.vodlist_sh li.vodlist_item").mapNotNull { parseVodlistItem(it) }
+            }
+            .distinctBy { it.url }
         return AnimeDetailBean(
             title = title,
             imgUrl = imgUrl,
             desc = desc,
             tags = tags,
-            relatedAnimes = emptyList(),
+            relatedAnimes = relatedAnimes,
             channels = getAnimeChannels(document)
         )
     }
@@ -157,5 +174,11 @@ class SkrSource : AnimeSource {
 
     private companion object {
         val PLAYER_DATA_REGEX = Regex("""player_aaaa\s*=\s*(\{.*?\})\s*[;<]""", RegexOption.DOT_MATCHES_ALL)
+
+        // 时间表页每天区块的 h2 标题 → WeekScreen 页序（0=周一 .. 6=周日）
+        val WEEK_LABEL_INDEX = mapOf(
+            "周一" to 0, "周二" to 1, "周三" to 2, "周四" to 3,
+            "周五" to 4, "周六" to 5, "周日" to 6,
+        )
     }
 }
