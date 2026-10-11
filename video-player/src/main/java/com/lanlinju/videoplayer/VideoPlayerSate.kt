@@ -19,7 +19,9 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -38,6 +40,12 @@ fun rememberVideoPlayerState(
         setLoadControl(loadControlCreator())
         setSeekForwardIncrementMs(15 * 1000)
         setSeekBackIncrementMs(15 * 1000)
+        // 统一 DataSource：放宽 HTTP 超时 + 网络瞬时错误长重试窗口（setMediaItem 路径的
+        // m3u8/mp4 播放走这里；带 headers 的 setMediaSource 路径在 mediaSourceCreator 内同样配置）
+        setMediaSourceFactory(
+            DefaultMediaSourceFactory(DefaultDataSource.Factory(context, loadHttpDataSourceFactory()))
+                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy())
+        )
     }
 ): VideoPlayerState = remember {
     VideoPlayerStateImpl(

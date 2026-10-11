@@ -14,7 +14,14 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import java.io.File
+import java.net.ConnectException
+import java.net.SocketException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import javax.net.ssl.SSLException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 
@@ -160,10 +167,61 @@ internal fun mediaItemCreator(url: String): MediaItem {
     return builder.build()
 }
 
+/** HTTP 连接/读取超时：默认 8s 对慢网络（TV 盒子 WiFi、播放 CDN 首包慢）太紧，放宽到 20s */
+internal const val HTTP_TIMEOUT_MS = 20_000
+
+/**
+ * 网络类瞬时错误的重试上限：默认策略 3 次（退避 0/1/2s，约 3 秒即报"视频加载失败"，
+ * 2026-10-11 实测 DNS 瞬时失败 3 秒就弹错误页）。放宽到 6 次、网络类错误退避 2s×n 封顶 8s，
+ * 失败窗口约 35-40 秒，期间 DNS/网络恢复即可自动续播。
+ */
+internal const val LOAD_RETRY_LIMIT = 6
+
+@OptIn(UnstableApi::class)
+internal fun loadHttpDataSourceFactory(headers: Map<String, String> = emptyMap()): DefaultHttpDataSource.Factory {
+    val factory = DefaultHttpDataSource.Factory()
+        .setConnectTimeoutMs(HTTP_TIMEOUT_MS)
+        .setReadTimeoutMs(HTTP_TIMEOUT_MS)
+    if (headers.isNotEmpty()) {
+        factory.setDefaultRequestProperties(headers)
+    }
+    return factory
+}
+
+/**
+ * 加载错误策略：DNS 解析失败/连接拒绝/超时/握手被重置这类网络瞬时错误给更长重试窗口
+ * （每次 2s×n 封顶 8s）；非网络错误（404 死链等）保持默认策略行为，不陪着重试。
+ */
+@OptIn(UnstableApi::class)
+internal fun loadErrorHandlingPolicy(): LoadErrorHandlingPolicy {
+    return object : DefaultLoadErrorHandlingPolicy(LOAD_RETRY_LIMIT) {
+        override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+            if (isTransientNetworkError(loadErrorInfo.exception)) {
+                return (loadErrorInfo.errorCount * 2_000L).coerceAtMost(8_000L)
+            }
+            return super.getRetryDelayMsFor(loadErrorInfo)
+        }
+
+        private fun isTransientNetworkError(e: Throwable?): Boolean {
+            var t: Throwable? = e
+            while (t != null) {
+                if (t is UnknownHostException || t is ConnectException || t is SocketTimeoutException
+                    || t is SocketException || t is SSLException
+                ) {
+                    return true
+                }
+                t = t.cause
+            }
+            return false
+        }
+    }
+}
+
 @OptIn(UnstableApi::class)
 internal fun mediaSourceCreator(url: String, headers: Map<String, String>): MediaSource {
-    val dataSourceFactory = DefaultHttpDataSource.Factory().setDefaultRequestProperties(headers)
+    val dataSourceFactory = loadHttpDataSourceFactory(headers)
     val videoSource: MediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
+        .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy())
         .createMediaSource(mediaItemCreator(url))
     return videoSource
 }
