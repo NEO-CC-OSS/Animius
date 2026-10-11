@@ -206,9 +206,9 @@ fun VideoPlayScreen(
             // 仅 TV 使用；手机端 handleBackPress/tvRemoteControlHandler 不走这些分支
             val lastBackPressAtMs = remember { mutableLongStateOf(0L) }
             var backHintVisible by remember { mutableStateOf(false) }
-            var seekHintText by remember { mutableStateOf<String?>(null) }
-            // 淡出动画期间气泡仍需显示最后一次文本，单独留存
-            var lastSeekHintText by remember { mutableStateOf("") }
+            var seekHint by remember { mutableStateOf<SeekHintState?>(null) }
+            // 淡出动画期间气泡仍需显示最后一次内容，单独留存
+            var lastSeekHint by remember { mutableStateOf<SeekHintState?>(null) }
             val seekHintKey = remember { mutableIntStateOf(0) }
 
             // TV 焦点闭环：控制栏显示 → 焦点给「播放/暂停」按钮；控制栏与所有侧边
@@ -269,9 +269,9 @@ fun VideoPlayScreen(
                                     )
                                 }
                             },
-                            onSeekHint = { text ->
-                                lastSeekHintText = text
-                                seekHintText = text
+                            onSeekHint = { state ->
+                                lastSeekHint = state
+                                seekHint = state
                                 seekHintKey.intValue++
                             }
                         )
@@ -319,23 +319,22 @@ fun VideoPlayScreen(
                     }
                 }
 
-                // TV 直控：快进/快退 15s 提示（底部居中，1 秒无操作淡出；连续按键由
-                // seekHintKey 变化重置计时。淡出动画期间用 lastSeekHintText 保持最后文本）
+                // TV 直控：快进/快退 15s 提示（屏幕中央：动作+新时间点+迷你进度条；1 秒无操作
+                // 淡出；连续按键由 seekHintKey 变化重置计时。淡出动画期间用 lastSeekHint 保持最后内容）
                 AnimatedVisibility(
-                    visible = seekHintText != null,
+                    visible = seekHint != null,
                     enter = fadeIn(),
                     exit = fadeOut(),
-                    modifier = Modifier.align(Alignment.BottomCenter)
+                    modifier = Modifier.align(Alignment.Center)
                 ) {
-                    FloatingMessageIndicator(
-                        text = lastSeekHintText,
-                        modifier = Modifier.padding(bottom = 48.dp)
-                    )
+                    lastSeekHint?.let { hint ->
+                        SeekHintBubble(hint)
+                    }
                 }
                 LaunchedEffect(seekHintKey.intValue) {
-                    if (seekHintText != null) {
+                    if (seekHint != null) {
                         delay(SEEK_HINT_DURATION_MS)
-                        seekHintText = null
+                        seekHint = null
                     }
                 }
 
@@ -471,6 +470,13 @@ private const val BACK_EXIT_CONFIRM_INTERVAL_MS = 2000L
 private const val BACK_HINT_DURATION_MS = 2000L
 private const val SEEK_HINT_DURATION_MS = 1000L
 
+/** TV 直控快进/快退提示内容：动作文案 + seek 后进度比例（0..1）+ 新时间点/总时长 */
+private data class SeekHintState(
+    val label: String,
+    val progress: Float,
+    val timestamp: String,
+)
+
 @Composable
 private fun DanmakuHost(
     playerState: VideoPlayerState,
@@ -574,7 +580,7 @@ private fun Modifier.tvRemoteControlHandler(
     playerState: VideoPlayerState,
     onNextClick: () -> Unit = {},
     onPrevClick: () -> Unit = {},
-    onSeekHint: (String) -> Unit = {},
+    onSeekHint: (SeekHintState) -> Unit = {},
 ): Modifier = composed {
     val context = LocalContext.current
     val isTv = remember { isAndroidTV(context) }
@@ -616,10 +622,16 @@ private fun Modifier.tvRemoteControlHandler(
                 // player.currentPosition——直控下轮询已停，状态里的 videoPositionMs 是过期值
                 keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> {
                     playerState.control.skip(-15_000L)
+                    val positionMs = playerState.player.currentPosition
+                    val durationMs = playerState.videoDurationMs.value
                     onSeekHint(
-                        seekBackLabel + " · " + prettyVideoTimestamp(
-                            playerState.player.currentPosition.milliseconds,
-                            playerState.videoDurationMs.value.milliseconds
+                        SeekHintState(
+                            label = seekBackLabel,
+                            progress = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f,
+                            timestamp = prettyVideoTimestamp(
+                                positionMs.milliseconds,
+                                durationMs.milliseconds
+                            )
                         )
                     )
                     true
@@ -627,10 +639,16 @@ private fun Modifier.tvRemoteControlHandler(
 
                 keyCode == KeyEvent.KEYCODE_DPAD_RIGHT -> {
                     playerState.control.skip(15_000L)
+                    val positionMs = playerState.player.currentPosition
+                    val durationMs = playerState.videoDurationMs.value
                     onSeekHint(
-                        seekForwardLabel + " · " + prettyVideoTimestamp(
-                            playerState.player.currentPosition.milliseconds,
-                            playerState.videoDurationMs.value.milliseconds
+                        SeekHintState(
+                            label = seekForwardLabel,
+                            progress = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f,
+                            timestamp = prettyVideoTimestamp(
+                                positionMs.milliseconds,
+                                durationMs.milliseconds
+                            )
                         )
                     )
                     true
@@ -1026,6 +1044,49 @@ fun FloatingMessageIndicator(
             color = textColor,
             maxLines = 1,
         )
+    }
+}
+
+/**
+ * TV 直控快进/快退提示气泡（屏幕中央）：动作大字 + 新时间点/总时长 + 迷你进度条，
+ * 解决直控 seek 时"不知道快进了多少、进度在哪"的问题（用户 2026-10-11 反馈）
+ */
+@Composable
+private fun SeekHintBubble(hint: SeekHintState) {
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black.copy(alpha = 0.75f))
+            .padding(horizontal = 32.dp, vertical = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = hint.label,
+            color = Color.White,
+            style = MaterialTheme.typography.titleLarge
+        )
+        Text(
+            text = hint.timestamp,
+            color = Color.White.copy(alpha = 0.85f),
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+        Box(
+            modifier = Modifier
+                .padding(top = 12.dp)
+                .width(240.dp)
+                .height(5.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(Color.White.copy(alpha = 0.3f))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(hint.progress.coerceIn(0f, 1f))
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(Color.White)
+            )
+        }
     }
 }
 

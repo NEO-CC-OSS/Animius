@@ -12,7 +12,10 @@ import com.lanlinju.animius.data.remote.parse.GugufanSource
 // import com.lanlinju.animius.data.remote.parse.MxdmSource
 // import com.lanlinju.animius.data.remote.parse.NtdmSource
 // import com.lanlinju.animius.data.remote.parse.NyafunSource
+// 2026-10 新增源（2026-10-11 源站评测报告，取证+全链路实测）
+import com.lanlinju.animius.data.remote.parse.JzacgSource
 import com.lanlinju.animius.data.remote.parse.SilisiliSource
+import com.lanlinju.animius.data.remote.parse.SkrSource
 // 2026-10 整站改版为 next.xifanacg.com（Next.js 新站），旧解析全部失效，等上游跟进
 // import com.lanlinju.animius.data.remote.parse.XifanSource
 // import com.lanlinju.animius.data.remote.parse.YhdmSource
@@ -79,6 +82,8 @@ object SourceHolder {
             // SourceMode.Xifan -> XifanSource()
             // SourceMode.Ntdm -> NtdmSource()
             SourceMode.Gugufan -> GugufanSource()
+            SourceMode.Skr -> SkrSource()
+            SourceMode.Jzacg -> JzacgSource()
         }
     }
 }
@@ -89,6 +94,8 @@ enum class SourceMode {
     Girigiri,
     // Cycanime,
     Gugufan,
+    Skr,
+    Jzacg,
     // Mxdm,
     // Xifan,
     // Ntdm,
