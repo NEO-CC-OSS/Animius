@@ -3,6 +3,7 @@ package com.lanlinju.animius.presentation.screen.videoplayer
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.os.SystemClock
 import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
@@ -71,9 +72,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableLongState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -199,6 +202,15 @@ fun VideoPlayScreen(
             val containerFocusRequester = remember { FocusRequester() }
             val playPauseFocusRequester = remember { FocusRequester() }
 
+            // TV 直控模式：双击返回退出（防误退）与快进/快退 15s 提示的状态。
+            // 仅 TV 使用；手机端 handleBackPress/tvRemoteControlHandler 不走这些分支
+            val lastBackPressAtMs = remember { mutableLongStateOf(0L) }
+            var backHintVisible by remember { mutableStateOf(false) }
+            var seekHintText by remember { mutableStateOf<String?>(null) }
+            // 淡出动画期间气泡仍需显示最后一次文本，单独留存
+            var lastSeekHintText by remember { mutableStateOf("") }
+            val seekHintKey = remember { mutableIntStateOf(0) }
+
             // TV 焦点闭环：控制栏显示 → 焦点给「播放/暂停」按钮；控制栏与所有侧边
             // 面板（选集/倍速/比例）都关闭 → 焦点还给容器回到直控模式。面板打开期间
             // 不抢焦点（面板自身会把焦点交给选中项）
@@ -238,7 +250,7 @@ fun VideoPlayScreen(
                     headers = video.headers,
                     // TV 直控模式：进播放器不自动唤起控制栏（用户要求），手机端保持原行为
                     showControllerOnStart = !isTv,
-                    onBackPress = { handleBackPress(playerState, onBackClick, view, activity) },
+                    onBackPress = { handleBackPress(playerState, onBackClick, view, activity, lastBackPressAtMs, { backHintVisible = true }) },
                     modifier = Modifier
                         .focusRequester(containerFocusRequester)
                         .focusable()
@@ -256,6 +268,11 @@ fun VideoPlayScreen(
                                         playerState.player.currentPosition
                                     )
                                 }
+                            },
+                            onSeekHint = { text ->
+                                lastSeekHintText = text
+                                seekHintText = text
+                                seekHintKey.intValue++
                             }
                         )
                 ) {
@@ -263,7 +280,7 @@ fun VideoPlayScreen(
                         state = playerState,
                         title = "${video.title}-${video.episodeName}",
                         danmakuEnabled = danmakuEnabled,
-                        onBackClick = { handleBackPress(playerState, onBackClick, view, activity) },
+                        onBackClick = { handleBackPress(playerState, onBackClick, view, activity, lastBackPressAtMs, { backHintVisible = true }) },
                         onNextClick = {
                             playerState.control.pause()
                             playerState.setLoading(true)
@@ -285,6 +302,43 @@ fun VideoPlayScreen(
                 // Danmaku and additional UI components
                 DanmakuHost(playerState, danmakuSession, danmakuEnabled)
                 DanmakuStatusMessage(danmakuStatus)
+
+                // TV 直控：返回退出确认提示（屏幕居中，2 秒无操作自动淡出）
+                AnimatedVisibility(
+                    visible = backHintVisible,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.Center)
+                ) {
+                    FloatingMessageIndicator(text = stringResource(R.string.player_back_hint))
+                }
+                LaunchedEffect(backHintVisible) {
+                    if (backHintVisible) {
+                        delay(BACK_HINT_DURATION_MS)
+                        backHintVisible = false
+                    }
+                }
+
+                // TV 直控：快进/快退 15s 提示（底部居中，1 秒无操作淡出；连续按键由
+                // seekHintKey 变化重置计时。淡出动画期间用 lastSeekHintText 保持最后文本）
+                AnimatedVisibility(
+                    visible = seekHintText != null,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                ) {
+                    FloatingMessageIndicator(
+                        text = lastSeekHintText,
+                        modifier = Modifier.padding(bottom = 48.dp)
+                    )
+                }
+                LaunchedEffect(seekHintKey.intValue) {
+                    if (seekHintText != null) {
+                        delay(SEEK_HINT_DURATION_MS)
+                        seekHintText = null
+                    }
+                }
+
                 VideoStateMessage(playerState, viewModel, isAutoContinuePlayEnabled)
                 VolumeBrightnessIndicator(playerState)
                 VideoSideSheet(video, playerState, viewModel)
@@ -386,7 +440,9 @@ private fun handleBackPress(
     playerState: VideoPlayerState,
     onBackClick: () -> Unit,
     view: View,
-    activity: Activity
+    activity: Activity,
+    lastBackPressAtMs: MutableLongState,
+    onBackHint: () -> Unit
 ) {
     // TV：控制栏显示时返回只收起控制栏（总表"返回=逐层退出"），再按一次才退出播放器。
     // 手机/平板保持原行为不变
@@ -394,12 +450,26 @@ private fun handleBackPress(
         playerState.hideControlUi()
         return
     }
+    // TV 直控模式：第一次返回只弹提示不退出，2 秒内再按才真正退出（防误触）。
+    // 选集等侧边面板打开时有自己的 BackHandler 先关面板，不会走到这里
+    if (isAndroidTV(activity)) {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastBackPressAtMs.longValue >= BACK_EXIT_CONFIRM_INTERVAL_MS) {
+            lastBackPressAtMs.longValue = now
+            onBackHint()
+            return
+        }
+    }
     // 由于在竖屏模式下返回会导致SystemBars的Padding丢失，所以调用hideSystemBars()临时解决
     if (!playerState.isFullscreen.value) {
         hideSystemBars(view, activity)
     }
     onBackClick()
 }
+
+private const val BACK_EXIT_CONFIRM_INTERVAL_MS = 2000L
+private const val BACK_HINT_DURATION_MS = 2000L
+private const val SEEK_HINT_DURATION_MS = 1000L
 
 @Composable
 private fun DanmakuHost(
@@ -504,9 +574,13 @@ private fun Modifier.tvRemoteControlHandler(
     playerState: VideoPlayerState,
     onNextClick: () -> Unit = {},
     onPrevClick: () -> Unit = {},
+    onSeekHint: (String) -> Unit = {},
 ): Modifier = composed {
     val context = LocalContext.current
     val isTv = remember { isAndroidTV(context) }
+    // onKeyEvent 回调非 Composable 上下文，文案在组合期取好
+    val seekBackLabel = stringResource(R.string.player_seek_back)
+    val seekForwardLabel = stringResource(R.string.player_seek_forward)
     if (!isTv) {
         this
     } else {
@@ -538,13 +612,27 @@ private fun Modifier.tvRemoteControlHandler(
                 // 焦点导航模式：方向键/确定都交给焦点系统与按钮自身
                 playerState.isControlUiVisible.value -> false
 
+                // 直控模式快进/快退：skip 带边界夹取（VideoPlayerSate），提示读
+                // player.currentPosition——直控下轮询已停，状态里的 videoPositionMs 是过期值
                 keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> {
-                    playerState.control.rewind()
+                    playerState.control.skip(-15_000L)
+                    onSeekHint(
+                        seekBackLabel + " · " + prettyVideoTimestamp(
+                            playerState.player.currentPosition.milliseconds,
+                            playerState.videoDurationMs.value.milliseconds
+                        )
+                    )
                     true
                 }
 
                 keyCode == KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    playerState.control.forward()
+                    playerState.control.skip(15_000L)
+                    onSeekHint(
+                        seekForwardLabel + " · " + prettyVideoTimestamp(
+                            playerState.player.currentPosition.milliseconds,
+                            playerState.videoDurationMs.value.milliseconds
+                        )
+                    )
                     true
                 }
 

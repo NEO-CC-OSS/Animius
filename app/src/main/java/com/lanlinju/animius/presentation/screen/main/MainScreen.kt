@@ -43,8 +43,9 @@ fun MainScreen(
 ) {
     val viewModel = hiltViewModel<MainViewModel>()
     val showVersionUpdateDialog by viewModel.showVersionUpdateDialog.collectAsState()
-    var currentDestination by rememberSaveable { mutableStateOf(NavigationBarPath.Home.route) }
-    val pagerState = rememberPagerState(initialPage = 1) { NavigationBarPath.entries.size }
+    // TV 优化：启动默认落在时间表页（用户拍板），侧栏顺序不变
+    var currentDestination by rememberSaveable { mutableStateOf(NavigationBarPath.RSlash.route) }
+    val pagerState = rememberPagerState(initialPage = 0) { NavigationBarPath.entries.size }
     val scope = rememberCoroutineScope()
 
     val configuration = LocalConfiguration.current // 屏幕方向改变会触发 recompose

@@ -8,11 +8,13 @@ import com.lanlinju.animius.data.remote.parse.AnimeSource
 import com.lanlinju.animius.data.remote.parse.GirigiriSource
 // import com.lanlinju.animius.data.remote.parse.GogoanimeSource
 import com.lanlinju.animius.data.remote.parse.GugufanSource
-import com.lanlinju.animius.data.remote.parse.MxdmSource
+// 2026-10 域名已被 ParkLogic 停泊（返回变现跳转页），死源不会恢复
+// import com.lanlinju.animius.data.remote.parse.MxdmSource
 // import com.lanlinju.animius.data.remote.parse.NtdmSource
 // import com.lanlinju.animius.data.remote.parse.NyafunSource
 import com.lanlinju.animius.data.remote.parse.SilisiliSource
-import com.lanlinju.animius.data.remote.parse.XifanSource
+// 2026-10 整站改版为 next.xifanacg.com（Next.js 新站），旧解析全部失效，等上游跟进
+// import com.lanlinju.animius.data.remote.parse.XifanSource
 // import com.lanlinju.animius.data.remote.parse.YhdmSource
 
 object SourceHolder {
@@ -65,14 +67,16 @@ object SourceHolder {
         return when (mode) {
             // SourceMode.Yhdm -> YhdmSource
             SourceMode.Silisili -> SilisiliSource
-            SourceMode.Mxdm -> MxdmSource
+            // 2026-10 域名停泊死源（见 import 处说明）
+            // SourceMode.Mxdm -> MxdmSource
             SourceMode.Agedm -> AgedmSource
 //            SourceMode.Anfuns -> AnfunsSource
             SourceMode.Girigiri -> GirigiriSource
             // SourceMode.Nyafun -> NyafunSource
             // SourceMode.Cycanime -> CycanimeSource
             // SourceMode.Gogoanime -> GogoanimeSource
-            SourceMode.Xifan -> XifanSource()
+            // 2026-10 整站改版失效（见 import 处说明）
+            // SourceMode.Xifan -> XifanSource()
             // SourceMode.Ntdm -> NtdmSource()
             SourceMode.Gugufan -> GugufanSource()
         }
@@ -85,8 +89,8 @@ enum class SourceMode {
     Girigiri,
     // Cycanime,
     Gugufan,
-    Mxdm,
-    Xifan,
+    // Mxdm,
+    // Xifan,
     // Ntdm,
     // Nyafun,
 
