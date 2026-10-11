@@ -15,6 +15,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.jsoup.Jsoup
+import java.io.IOException
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.Base64
@@ -125,8 +126,12 @@ class JzacgSource : AnimeSource {
      * 全链路包重试：密文每请求轮换，重试时整链重来即用新密文，无状态。
      */
     override suspend fun getVideoData(episodeUrl: String): VideoBean = withRetry {
-        // 1) 播放页：player_aaaa JSON（url=站方密文、from=线路标识）
-        val html = DownloadManager.getHtml(fullUrl(episodeUrl))
+        // 1) 播放页：player_aaaa JSON（url=站方密文、from=线路标识）；连接超时收紧，
+        //    站点 DNS 抖动时快速失败（正常连通 1 秒内，零误伤）
+        val html = DownloadManager.getHtml(
+            fullUrl(episodeUrl),
+            connectTimeoutMs = 10_000,
+        )
         val playerJson = PLAYER_DATA_REGEX.find(html)?.groupValues?.get(1)
             ?: error("橘子：播放页未找到 player_aaaa 数据")
         val player = Json.parseToJsonElement(playerJson).jsonObject
@@ -138,8 +143,21 @@ class JzacgSource : AnimeSource {
         val parseBase = resolveParseUrl(from)
             ?: error("橘子：未知线路 from=$from，站点配置可能已变更，需重新取证")
 
-        // 3) cloudplay 中转页：config.url（新一轮 AES 密文）+ 派生密钥用的两个轮换 meta id
-        val cloudplayHtml = DownloadManager.getHtml(parseBase + encrypted)
+        // 3) cloudplay 中转页：config.url（新一轮 AES 密文）+ 派生密钥用的两个轮换 meta id。
+        //    连接超时收紧（站方节点故障时快速浮出，不再 30s×3 干等）；连接层失败文案区分
+        //    "站点侧故障"（超时/断连）与"站方改版"（结构/解密异常），实机报错一眼定性
+        val cloudplayHtml = try {
+            DownloadManager.getHtml(
+                parseBase + encrypted,
+                connectTimeoutMs = 10_000,
+                requestTimeoutMs = 15_000,
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            // ConnectTimeout/SocketTimeout 均为 IOException 子类
+            error("橘子：云端线路暂不可用（站点侧故障），请稍后重试")
+        }
         val cloudDoc = Jsoup.parse(cloudplayHtml)
         val configJson = CONFIG_DATA_REGEX.find(cloudplayHtml)?.groupValues?.get(1)
             ?: error("橘子：播放中转页未找到 config 数据")

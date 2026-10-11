@@ -10,6 +10,7 @@ import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logger
 import io.ktor.client.plugins.logging.Logging
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.statement.bodyAsText
@@ -77,11 +78,26 @@ object DownloadManager {
         return api.get(url, header)
     }*/
 
-    suspend fun getHtml(url: String, headers: Map<String, String> = emptyMap()): String {
+    /**
+     * [connectTimeoutMs]/[requestTimeoutMs] 非空时以请求级超时覆盖全局值（install 级 30s/300s），
+     * 供个别慢站点/故障节点快速失败用（如橘子 cloudplay 线路探测）；null 保持全局默认。
+     */
+    suspend fun getHtml(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        connectTimeoutMs: Long? = null,
+        requestTimeoutMs: Long? = null,
+    ): String {
         val html = httpClient.get(url) {
             headers {
                 headers.forEach { (key, value) ->
                     append(key, value)
+                }
+            }
+            if (connectTimeoutMs != null || requestTimeoutMs != null) {
+                timeout {
+                    connectTimeoutMs?.let { connectTimeoutMillis = it }
+                    requestTimeoutMs?.let { requestTimeoutMillis = it }
                 }
             }
         }.bodyAsText()
