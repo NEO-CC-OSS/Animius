@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./image/icon.jpeg" width="120" alt="Animius TV版"/>
+<img src="./image/icon-tv.png" width="120" alt="Animius TV版"/>
 
 # Animius TV版
 
