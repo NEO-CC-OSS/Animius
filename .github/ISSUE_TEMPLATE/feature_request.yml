@@ -1,0 +1,30 @@
+name: 💡 功能建议
+description: 新功能想法或体验改进建议
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        欢迎提出想法！日常使用中的疑问与交流也可前往 [Discussions](https://github.com/NEO-CC-OSS/Animius/discussions)。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 想解决的问题或场景
+      description: 现在有什么不方便，或想实现什么效果
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: 期望的方案
+      description: 如果有想好的交互/呈现方式，描述一下；没有也没关系
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: 适用范围
+      options:
+        - label: 主要在 TV 端使用
+        - label: 也希望兼顾手机/平板

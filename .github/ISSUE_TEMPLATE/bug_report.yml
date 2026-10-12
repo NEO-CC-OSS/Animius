@@ -1,0 +1,83 @@
+name: 🐛 问题反馈（Bug 报告）
+description: 应用出现崩溃、功能异常、加载失败等问题时提交
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请尽量填写以下信息，信息越全问题越好定位。
+        使用上的疑问与交流建议前往 [Discussions](https://github.com/NEO-CC-OSS/Animius/discussions)。
+
+  - type: dropdown
+    id: install_source
+    attributes:
+      label: 安装来源
+      description: 您的 APK 来自哪里
+      options:
+        - 本仓库 Releases 下载
+        - 应用内「检查更新」自动升级
+        - 自行构建
+        - 其他渠道
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 应用版本
+      description: 设置 → 关于 中可见，如 1.3.5-tv.3
+      placeholder: 1.3.5-tv.3
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: 设备型号
+      description: 电视/盒子/模拟器的品牌与型号
+      placeholder: 例：小米电视 ES65 / 某某盒子 X3 / Android TV 模拟器
+    validations:
+      required: true
+
+  - type: input
+    id: android_version
+    attributes:
+      label: Android 版本
+      description: 设置 → 关于 中可见
+      placeholder: 例：Android 9
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 重现步骤
+      description: 怎样操作会触发这个问题
+      placeholder: |
+        1. 打开…
+        2. 点击…
+        3. 出现…
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望现象与实际现象
+      placeholder: 期望…实际…
+    validations:
+      required: true
+
+  - type: textarea
+    id: logcat
+    attributes:
+      label: 日志（可选，能大幅加快定位）
+      description: |
+        有电脑的情况下：电视/盒子打开开发者选项中的 USB 调试并连接电脑，
+        运行 `adb logcat -d > log.txt` 后把文件内容粘贴到这里（注意先删除日志中的个人信息）。
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充说明（可选）
+      description: 截图、视频等其他有助于定位的信息
