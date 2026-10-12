@@ -1,83 +1,73 @@
+<div align="center">
+
+<img src="./image/icon.jpeg" width="120" alt="Animius TV版"/>
+
 # Animius TV版
 
-> 本仓库是 [lanlinju/Animius](https://github.com/lanlinju/Animius)（v1.3.5，GPL v3）的 TV 设备定制版，
-> 经原作者同意开源，并允许使用「Animius TV版」名称。感谢原作者 [Lanlinju](https://github.com/lanlinju) 的开源工作。
+**为 Android TV 大屏优化的开源动漫播放器**
 
-**相对上游的主要改动**（详见提交历史）：
+遥控器友好 · 弹幕 · 多数据源 · 离线下载
 
-- TV 端全局焦点体系（主题色描边）与遥控器适配、播放器"直控/焦点"双模式、长按 2 秒上下文操作
-- 失效数据源清理（域名易主/停摆/SPA 化的 5 个源）
-- HTTPS 证书链补全（TlsChainFix，公共 CA 严格校验）
-- 弹幕：加载失败原因可见（鉴权失败/未匹配/网络错误分类提示）、集数匹配增强
-- 封面加载：统一 ImageLoader（共享证书补全 + UA + 磁盘缓存）
-
-**数据来源**：弹幕数据来自 [弹弹play开放弹幕网络](https://www.dandanplay.com)。
-
-**自行构建**：JDK 17 + Android SDK，`./gradlew :app:assembleDebug`。本项目仅供学习交流，弹幕功能免费，无任何商业用途。
-
----
-
-（以下为上游原 README）
-
-# Animius
-
-一个简洁的播放动漫的App，支持下载，弹幕，多数据源等功能，使用[Jetpack Compose](https://developer.android.com/jetpack?hl=zh-cn)
-进行开发
-
-## 如何下载安装
-
-点击此链接[下载地址](https://github.com/NEO-CC-OSS/Animius/releases/latest)
-前往下载页面，然后选择下载以`.apk`结尾的文件（单包支持全部架构，Android TV / Android 8.0+ 均可安装）。
-
-## 应用截图
+[![Release](https://img.shields.io/github/v/release/NEO-CC-OSS/Animius?style=flat-square)](https://github.com/NEO-CC-OSS/Animius/releases/latest)
+[![License](https://img.shields.io/badge/License-GPL--3.0-orange?style=flat-square)](#-致谢与声明)
+[![Stars](https://img.shields.io/github/stars/NEO-CC-OSS/Animius?style=flat-square)](https://github.com/NEO-CC-OSS/Animius/stargazers)
+[![Platform](https://img.shields.io/badge/Platform-Android%20TV%20%7C%208.0%2B-green?style=flat-square)](#-下载安装)
+[![CI](https://github.com/NEO-CC-OSS/Animius/actions/workflows/android_ci.yml/badge.svg?branch=source-danmaku)](https://github.com/NEO-CC-OSS/Animius/actions/workflows/android_ci.yml)
 
 <table>
   <tr>
-    <td><img src="./image/week.jpg" alt="week"/></td>
-    <td><img src="./image/home.jpg" alt="home"/></td>
-    <td><img src="./image/favourite.jpg" alt="favourite"/></td>
-  <tr>
-  <tr>
-    <td><img src="./image/detail.jpg" alt="detail"/></td>
-    <td><img src="./image/history.jpg" alt="history"/></td>
-    <td><img src="./image/download_episode.jpg" alt="download episode"/></td>
-  </tr>
-  <tr>
-    <td colspan="3"><img src="./image/player.jpg" alt="player"/></td>
+    <td><img src="./image/tv/tv-home.jpg" alt="推荐页"/></td>
+    <td><img src="./image/tv/tv-schedule.jpg" alt="时间表"/></td>
+    <td><img src="./image/tv/tv-detail.jpg" alt="详情页"/></td>
   </tr>
 </table>
 
-## 相关功能
+</div>
 
+## ✨ 功能特性
 
-- [x] 首页推荐
-- [x] 番剧搜索
-- [x] 番剧时间表
-- [x] 多数据源支持
-- [x] 历史记录
-- [x] 番剧下载
-- [x] 番剧收藏
-- [x] 动态主题颜色
-- [x] 视频播放器
-- [x] 倍速播放
-- [x] 外部播放器播放
-- [ ] 选择下载目录
-- [x] 弹幕功能
-- [ ] BT资源下载
-- [ ] 多平台 (Compose Multiplatform)
+- 📺 **为遥控器而生**：全局焦点体系，主题色描边让焦点位置一目了然；焦点记忆，离开再回来还在原处
+- 🎮 **播放器直控**：播放中双击返回、快进快退带中央气泡提示，不唤起控制栏也能顺手操作
+- 💬 **弹幕**：弹幕数据来自 [弹弹play 开放弹幕网络](https://www.dandanplay.com)，集数智能匹配；加载失败时原因可见（网络错误 / 未匹配 / 鉴权问题分类提示），不再一脸懵
+- 🗂 **多数据源**：内置多个动漫数据源，一键切换，某个源波动时快速换源
+- 🗓 **每周时间表**：按周组织的新番更新表，追番节奏一目了然
+- ⭐ **追番收藏 & 历史记录**：收藏追番、断点续播
+- ⬇️ **离线下载**：番剧下载，断网也能看
+- 🔄 **应用内检查更新**：一键检查并安装新版本
+- 🎨 **动态主题**：界面取色自当前番剧封面，随番换色
 
-## Architecture
+## 📺 下载安装
 
-使用的是[Google应用架构指南](https://developer.android.com/topic/architecture), MVVM 和 Clean
-Architecture
+1. 前往 [Releases Latest](https://github.com/NEO-CC-OSS/Animius/releases/latest) 下载最新 `.apk`（单包支持全部架构）
+2. 通过 U 盘、局域网等方式把 APK 传到电视 / 盒子上安装，也可在电视浏览器中直接下载
+3. 首次安装需在系统设置中允许「安装未知来源应用」
 
-## 参考来源
+- **系统要求**：Android TV / Android 8.0 及以上
+- **覆盖升级**：直接安装新版本即可保留数据；若提示签名冲突，说明设备上装过其他来源的旧版本，需先卸载再安装
 
-视频弹幕来自[弹弹play开放弹幕网络](https://www.dandanplay.com)
+## ❓ 常见问题
 
-- [SakuraAnime](https://github.com/670848654/SakuraAnime)：樱花动漫网站数据解析参考实现来源
-- [Animite](https://github.com/imashnake0/Animite)：应用UI设计参考实现来源
-- [compose-video-player](https://github.com/imherrera/compose-video-player)：Exoplayer视频播放器封装参考实现来源
-- [FreeToPlay](https://github.com/qababadr/FreeToPlay)：应用MVVM架构参考实现来源
-- [DownloadX](https://github.com/ssseasonnn/DownloadX)：视频文件下载功能参考实现来源
-- [Animeko](https://github.com/open-ani/animeko)：视频弹幕功能参考实现来源
+**弹幕不显示？**
+弹幕来自弹弹play 开放平台，需要设备能正常联网；部分冷门剧集可能未被弹幕库收录，此时会提示「未匹配」。
+
+**播放加载失败？**
+数据来自公共网络，个别线路会有波动。可切换数据源或稍后重试，播放器已内置网络异常自动重试。
+
+**遥控器按了没反应？**
+留意屏幕上的焦点框位置；个别系统的「鼠标模式」会干扰焦点操作，可尝试关闭。
+
+**手机能用吗？**
+本项目主要面向 TV 大屏优化，手机和平板可以安装使用，但交互体验以电视为准。
+
+## 🔧 自行构建
+
+- 环境：JDK 17 + Android SDK（用 Android Studio 打开工程最省事）
+- 构建：`./gradlew :app:assembleDebug`（正式版用 `assembleRelease`）
+- 弹幕功能：需在 [弹弹play 开放平台](https://www.dandanplay.com)申请开发者凭证，并在工程根目录的 `local.properties` 中配置 `dandanplayAppId` / `dandanplayAppSecret`（该文件不会入库）
+- 本项目仅供学习交流，弹幕功能免费，无任何商业用途
+
+## 🙏 致谢与声明
+
+- 上游项目：[lanlinju/Animius](https://github.com/lanlinju/Animius)（GPL-3.0）。本仓库是经原作者同意独立维护的 TV 定制分支，并沿用「Animius TV版」名称，感谢原作者 [Lanlinju](https://github.com/lanlinju) 的开源工作。上游的应用架构说明与参考来源详见[上游仓库 README](https://github.com/lanlinju/Animius#readme)。
+- 弹幕数据：[弹弹play 开放弹幕网络](https://www.dandanplay.com)
+- 本项目不存储、不分发任何影视内容，所有数据均来自公共网络；仅供学习交流，请于下载后 24 小时内删除，如认可相关作品请支持正版。
