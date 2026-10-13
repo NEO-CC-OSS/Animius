@@ -38,9 +38,21 @@ interface DanmakuProviderFactory { // SPI 接口
     fun create(): DanmakuProvider
 }
 
+/**
+ * 弹弹play 弹幕提供者。
+ *
+ * 匹配流程（按调用量从少到多，任一步命中即返回）：
+ * 1. 本地缓存（命中则零 API 调用）
+ * 2. 关键词搜索 /api/v2/search/episodes（原有路径，保持不变）
+ * 3. 搜索无结果时走文件识别 /api/v2/match 兜底（解决源站番剧名与弹弹play 写法对不上的问题）
+ *
+ * 文件识别结果必须通过 [DanmakuMatchHeuristics.pickBestMatch] 的可信度校验才会采用，
+ * 宁可没有弹幕，也不错挂其他剧集的弹幕。
+ */
 @Singleton
 class DandanplayDanmakuProvider @Inject constructor(
-    private val client: HttpClient
+    private val client: HttpClient,
+    private val matchCache: DanmakuMatchCache,
 ) : DanmakuProvider {
 
     companion object {
@@ -51,12 +63,18 @@ class DandanplayDanmakuProvider @Inject constructor(
     override val id: String get() = ID
 
     private val dandanplayClient = DandanplayClient(client)
-    private val moviePattern = Regex("全集|HD|正片|剧场版|映画")
-    private val rangePattern = Regex("^(\\d+)\\s*[-~—]\\s*\\d+$") // 01-02 -> 取首集
-    private val leadingNumberPattern = Regex("^(\\d+)") // 01v2/01.5 -> 01
-    private val seasonPattern =
-        Regex("第[一二三四五六七八九十0-9０-９]+[季期部]|Season\\s*\\d+|\\bS\\d+\\b", RegexOption.IGNORE_CASE)
-    private val yearPattern = Regex("[（(\\[]\\d{4}[）)\\]]")
+
+    /** 单次匹配的中间结果 */
+    private sealed interface Outcome {
+        /** 命中 episodeId */
+        data class Matched(val episodeId: Long) : Outcome
+
+        /** 弹幕库中没有对应内容（可继续尝试下一层兜底） */
+        object NoResult : Outcome
+
+        /** 网络/鉴权类失败（不再兜底，直接呈现原因） */
+        data class Failed(val result: DanmakuResult) : Outcome
+    }
 
     override suspend fun fetch(
         subjectName: String, episodeName: String?
@@ -64,48 +82,100 @@ class DandanplayDanmakuProvider @Inject constructor(
         if (episodeName.isNullOrBlank()) {
             return DanmakuResult.UnsupportedEpisode("剧集名缺失，无法匹配弹幕")
         }
-        val targetEpisode = normalizeEpisodeName(episodeName)
+        val targetEpisode = DanmakuMatchHeuristics.normalizeEpisodeName(episodeName)
             ?: return DanmakuResult.UnsupportedEpisode("「$episodeName」暂不支持自动匹配弹幕")
 
-        // 搜索阶段（含网络异常）统一分类，不让异常穿透到 UI 层
+        val cacheKey = matchCache.keyOf(subjectName, targetEpisode)
+
+        // 1) 缓存：命中则完全不产生接口调用
+        matchCache.get(cacheKey)?.let { hit ->
+            return hit.episodeId
+                ?.let { createAndCache(cacheKey, it) }
+                ?: DanmakuResult.NotFound("弹幕库中未匹配到「$subjectName」第 $targetEpisode 集")
+        }
+
+        // 2) 关键词搜索（原有路径）
+        when (val searchOutcome = searchAndResolve(subjectName, targetEpisode)) {
+            is Outcome.Matched -> return createAndCache(cacheKey, searchOutcome.episodeId)
+            is Outcome.Failed -> return searchOutcome.result
+            Outcome.NoResult -> Unit
+        }
+
+        // 3) 文件识别兜底（仅搜索无结果时；实测可救回「源站番剧名与弹幕库写法不一致」的失配）
+        return when (val matchOutcome = matchAndResolve(subjectName, targetEpisode)) {
+            is Outcome.Matched -> createAndCache(cacheKey, matchOutcome.episodeId)
+            else -> {
+                matchCache.putNotFound(cacheKey)
+                DanmakuResult.NotFound("弹幕库中未匹配到「$subjectName」第 $targetEpisode 集")
+            }
+        }
+    }
+
+    /** 关键词搜索 + 番剧/集数回找（原有算法，仅将"无结果"与"失败"区分开以便兜底） */
+    private suspend fun searchAndResolve(subjectName: String, targetEpisode: String): Outcome {
         val searchResponse = try {
             fetchWithFallback(subjectName, targetEpisode)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             "弹幕搜索失败: $e".log(TAG)
-            return DanmakuResult.NetworkError("弹幕服务连接失败: ${e.message ?: e.javaClass.simpleName}")
+            return Outcome.Failed(
+                DanmakuResult.NetworkError("弹幕服务连接失败: ${e.message ?: e.javaClass.simpleName}")
+            )
         }
 
         if (!searchResponse.success) {
-            return classifyApiError(searchResponse.errorCode, searchResponse.errorMessage)
+            return Outcome.Failed(classifyApiError(searchResponse.errorCode, searchResponse.errorMessage))
         }
         if (searchResponse.animes.isEmpty()) {
-            return DanmakuResult.NotFound("弹幕库中未找到「$subjectName」")
+            return Outcome.NoResult
         }
 
         // 番剧回找：优先标题精确/包含匹配，不盲取第一条
-        val cleanedSubject = cleanSubjectName(subjectName)
-        val anime = searchResponse.animes.firstOrNull { it.animeTitle == subjectName }
-            ?: searchResponse.animes.firstOrNull { cleanedSubject.isNotBlank() && it.animeTitle.contains(cleanedSubject) }
+        val cleanedSubject = DanmakuMatchHeuristics.cleanSubjectName(subjectName)
+        val anime: SearchAnimeEpisodes = searchResponse.animes.firstOrNull { it.animeTitle == subjectName }
+            ?: searchResponse.animes.firstOrNull {
+                cleanedSubject.isNotBlank() && it.animeTitle.contains(cleanedSubject)
+            }
             ?: searchResponse.animes.first()
 
         // 集数回找：按归一化集数在候选列表中定位目标集，避免取到第一集的弹幕
-        val episode: SearchEpisodeDetails =
-            findTargetEpisode(anime.episodes, targetEpisode)
-                ?: if (anime.episodes.size == 1) {
-                    anime.episodes[0]
-                } else {
-                    return DanmakuResult.NotFound("弹幕库中未匹配到第 $targetEpisode 集")
-                }
+        val episode: SearchEpisodeDetails = findTargetEpisode(anime.episodes, targetEpisode)
+            ?: anime.episodes.singleOrNull()
+            ?: return Outcome.NoResult
 
-        return createSession(episode.episodeId.toLong())
+        return Outcome.Matched(episode.episodeId.toLong())
+    }
+
+    /** 文件识别兜底：构造虚拟文件名交给官方模糊匹配，候选须通过可信度校验 */
+    private suspend fun matchAndResolve(subjectName: String, targetEpisode: String): Outcome {
+        return try {
+            val fileName = DanmakuMatchHeuristics.buildMatchFileName(subjectName, targetEpisode)
+            val response = dandanplayClient.matchEpisode(fileName)
+            if (!response.success) {
+                "文件识别失败: errorCode=${response.errorCode} ${response.errorMessage}".log(TAG)
+                return Outcome.NoResult
+            }
+            val best = DanmakuMatchHeuristics.pickBestMatch(subjectName, targetEpisode, response.matches.orEmpty())
+            if (best != null) {
+                "文件识别命中: 「${best.animeTitle}」/「${best.episodeTitle}」 episodeId=${best.episodeId}".log(TAG)
+                Outcome.Matched(best.episodeId)
+            } else {
+                "文件识别无可靠候选（共 ${response.matches?.size ?: 0} 个）".log(TAG)
+                Outcome.NoResult
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            "文件识别异常: $e".log(TAG)
+            Outcome.NoResult
+        }
     }
 
     /** 搜索降级链：原名 -> 去掉「第X季/年份括号」后的主干名 */
     private suspend fun fetchWithFallback(subjectName: String, targetEpisode: String) =
         dandanplayClient.searchEpisode(subjectName, targetEpisode).let { first ->
-            val cleaned = cleanSubjectName(subjectName)
+            val cleaned = DanmakuMatchHeuristics.cleanSubjectName(subjectName)
             if (!first.success || first.animes.isNotEmpty() || cleaned == subjectName || cleaned.isBlank()) {
                 first
             } else {
@@ -114,32 +184,20 @@ class DandanplayDanmakuProvider @Inject constructor(
             }
         }
 
-    /** 剧集名归一化为弹弹play 可识别的集数；无法识别返回 null */
-    private fun normalizeEpisodeName(name: String): String? {
-        val trimmed = name.trim()
-        return when {
-            moviePattern.containsMatchIn(trimmed) -> "movie" // 剧场版
-            rangePattern.matches(trimmed) -> rangePattern.find(trimmed)!!.groupValues[1]
-            trimmed.contains("第") -> trimmed.filter { it.isDigit() }.ifEmpty { null } // 第01集/第01话 -> 01
-            trimmed.matches(Regex("\\d+")) -> trimmed // girigiri tv的剧集只有数字
-            else -> leadingNumberPattern.find(trimmed)?.groupValues[1] // 01v2/01.5 -> 01；纯「上/下」无数字 -> null
-        }
-    }
-
-    /** 去掉标题里的季数标注与年份括号，作为搜索降级的主干名 */
-    private fun cleanSubjectName(name: String): String =
-        name.replace(yearPattern, "").replace(seasonPattern, "").trim(' ', '-', '·', '~', '～')
-
     /**
      * 在候选集列表中定位目标集：
-     * 归一化后相等优先；全列表唯一时直接采用；否则视为未命中（宁可无弹幕也不错挂其他集的时间轴）。
+     * 归一化后相等优先（忽略前导零差异，源站「第01集」与弹弹play「第1话」是同一集）；
+     * 全列表唯一时直接采用；否则视为未命中（宁可无弹幕也不错挂其他集的时间轴）。
      */
     private fun findTargetEpisode(
         episodes: List<SearchEpisodeDetails>,
         target: String,
     ): SearchEpisodeDetails? {
-        episodes.firstOrNull { normalizeEpisodeName(it.episodeTitle) == target }?.let { return it }
-        return if (episodes.size == 1) episodes[0] else null
+        val canonical = DanmakuMatchHeuristics.canonicalEpisode(target)
+        return episodes.firstOrNull { detail ->
+            val normalized = DanmakuMatchHeuristics.normalizeEpisodeName(detail.episodeTitle)
+            normalized != null && DanmakuMatchHeuristics.canonicalEpisode(normalized) == canonical
+        }
     }
 
     private fun classifyApiError(errorCode: Int, errorMessage: String?): DanmakuResult {
@@ -150,6 +208,17 @@ class DandanplayDanmakuProvider @Inject constructor(
         } else {
             DanmakuResult.NetworkError("弹弹play 服务返回错误: $message")
         }
+    }
+
+    /** 拉取弹幕并回写缓存（成功与"该集无弹幕"都会缓存，网络类失败不缓存） */
+    private suspend fun createAndCache(cacheKey: String, episodeId: Long): DanmakuResult {
+        val result = createSession(episodeId)
+        when (result) {
+            is DanmakuResult.Success -> matchCache.putMatched(cacheKey, episodeId)
+            is DanmakuResult.NotFound -> matchCache.putNotFound(cacheKey)
+            else -> Unit
+        }
+        return result
     }
 
     private suspend fun createSession(
@@ -186,6 +255,6 @@ class DandanplayDanmakuProviderFactory : DanmakuProviderFactory {
     override val id: String get() = ID
 
     override fun create(): DandanplayDanmakuProvider {
-        return DandanplayDanmakuProvider(createHttpClient())
+        return DandanplayDanmakuProvider(createHttpClient(), DanmakuMatchCache())
     }
 }

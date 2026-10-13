@@ -3,6 +3,8 @@ package com.lanlinju.animius.data.remote.dandanplay
 import com.lanlinju.animius.BuildConfig
 import com.lanlinju.animius.data.remote.dandanplay.dto.DandanplayDanmaku
 import com.lanlinju.animius.data.remote.dandanplay.dto.DandanplayDanmakuListResponse
+import com.lanlinju.animius.data.remote.dandanplay.dto.DandanplayMatchRequest
+import com.lanlinju.animius.data.remote.dandanplay.dto.DandanplayMatchResponse
 import com.lanlinju.animius.data.remote.dandanplay.dto.DandanplaySearchEpisodeResponse
 import com.lanlinju.animius.util.log
 import io.ktor.client.HttpClient
@@ -13,7 +15,10 @@ import io.ktor.client.request.accept
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
+import io.ktor.http.contentType
 import io.ktor.http.encodedPath
 import java.lang.System.currentTimeMillis
 import java.security.MessageDigest
@@ -62,6 +67,30 @@ class DandanplayClient(
             throw DandanplayApiException(response.errorCode, response.errorMessage ?: "errorCode=${response.errorCode}")
         }
         return response.comments
+    }
+
+    /**
+     * 文件识别（/api/v2/match）：按文件名做模糊匹配，用于 search/episodes 失配时的兜底。
+     *
+     * 流媒体播放没有本地文件、无法计算真实文件哈希，因此以占位哈希 + fileNameOnly 模式发起
+     * （实测：fileHash 缺失会被判为参数错误，占位哈希不影响文件名匹配结果）。
+     */
+    suspend fun matchEpisode(fileName: String): DandanplayMatchResponse {
+        "文件识别: fileName=$fileName".log(TAG)
+        val response = client.post("https://api.dandanplay.net/api/v2/match") {
+            configureTimeout()
+            accept(ContentType.Application.Json)
+            contentType(ContentType.Application.Json)
+            addAuthorizationHeaders()
+            setBody(
+                DandanplayMatchRequest(
+                    fileName = fileName,
+                    fileHash = DandanplayMatchRequest.PLACEHOLDER_FILE_HASH,
+                    matchMode = DandanplayMatchRequest.MATCH_MODE_FILE_NAME_ONLY,
+                )
+            )
+        }
+        return response.body<DandanplayMatchResponse>()
     }
 
     private fun HttpRequestBuilder.addAuthorizationHeaders() {
