@@ -2,33 +2,30 @@ package com.lanlinju.animius.presentation.screen.main
 
 import android.content.Context
 import androidx.core.content.edit
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.lanlinju.animius.BuildConfig
-import com.lanlinju.animius.R
 import com.lanlinju.animius.application.AnimeApplication
-import com.lanlinju.animius.util.CHECK_UPDATE_ADDRESS
+import com.lanlinju.animius.domain.model.UpdateState
+import com.lanlinju.animius.util.GitHubRelease
 import com.lanlinju.animius.util.KEY_IS_AUTO_CHECK_UPDATE
 import com.lanlinju.animius.util.KEY_LAST_CHECK_UPDATE_TIME
-import com.lanlinju.animius.util.installApk
+import com.lanlinju.animius.util.fetchLatestRelease
 import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.preferenceForBoolean
 import com.lanlinju.animius.util.preferenceForLong
 import com.lanlinju.animius.util.preferences
-import com.lanlinju.animius.util.toast
+import com.lanlinju.animius.work.cancelUpdateWork
+import com.lanlinju.animius.work.enqueueUpdateWork
+import com.lanlinju.animius.work.observeUpdateWork
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.plugins.onDownload
-import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsBytes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
-import java.io.File
 import java.lang.System.currentTimeMillis
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -43,6 +40,10 @@ class MainViewModel @Inject constructor(
         MutableStateFlow(value = false)
     val showVersionUpdateDialog = _showVersionUpdateDialog.asStateFlow()
 
+    // 下载阶段状态（驱动进度对话框；检查阶段维持原有行为，不在此模型内）
+    private val _updateState: MutableStateFlow<UpdateState> = MutableStateFlow(UpdateState.Idle)
+    val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()
+
     // 应用的偏好设置
     private val preferences = AnimeApplication.getInstance().preferences
 
@@ -50,6 +51,8 @@ class MainViewModel @Inject constructor(
     lateinit var updateDownloadUrl: String
     lateinit var updateDescription: String
     lateinit var updateVersionName: String
+    private var updateSha256: String? = null
+    private var updateSize: Long = 0L
     lateinit var gitHubRelease: GitHubRelease
 
     init {
@@ -79,17 +82,21 @@ class MainViewModel @Inject constructor(
     }
 
     /**
-     * 执行更新检查逻辑
+     * 执行更新检查逻辑（直连失败自动走镜像）
      */
     private suspend fun checkForUpdates() {
         try {
-            // 从 GitHub 获取更新信息
-            gitHubRelease = httpClient.get(CHECK_UPDATE_ADDRESS).body<GitHubRelease>()
+            // 从 GitHub 获取更新信息（多通道）
+            val release = fetchLatestRelease(httpClient) ?: return
 
             // 保存更新信息
-            this.updateDownloadUrl = gitHubRelease.assets[0].browserDownloadUrl
-            this.updateDescription = gitHubRelease.body
-            this.updateVersionName = gitHubRelease.tagName
+            gitHubRelease = release
+            val asset = release.assets.firstOrNull() ?: return
+            this.updateDownloadUrl = asset.browserDownloadUrl
+            this.updateSha256 = asset.digest
+            this.updateSize = asset.size
+            this.updateDescription = release.body
+            this.updateVersionName = release.tagName
 
             // 获取当前应用版本号
             val curVersionName = "v${BuildConfig.VERSION_NAME}"
@@ -104,38 +111,32 @@ class MainViewModel @Inject constructor(
     }
 
     /**
-     * 下载更新文件并保存到本地
+     * 开始下载更新：入队后台任务并观察其状态/进度。
+     *
+     * 与时间表页手动检查共用同一个 WorkManager 唯一任务（KEEP 策略），
+     * 因此重复触发不会并发下载；用户切走页面后任务继续、回来仍能看到进度。
      */
-    fun downloadUpdate(context: Context) {
-        viewModelScope.launch {
-            try {
-                context.toast(R.string.downloading_updates)
-                val file = File(context.getExternalFilesDir("apk/"), "base.apk")
-                downloadApk(updateDownloadUrl, file)
-                context.installApk(file)// 安装Apk
-            } catch (_: Exception) {
-                context.toast(R.string.download_software_failed)
+    fun downloadUpdate(context: Context, lifecycleOwner: LifecycleOwner) {
+        enqueueUpdateWork(context, updateDownloadUrl, updateSha256, updateSize)
+        observeUpdateWork(context, lifecycleOwner) { state ->
+            if (state is UpdateState.Completed) {
+                // 已调起系统安装器：关闭对话框并复位状态，避免对话框停留在"正在调起安装程序…"
+                _showVersionUpdateDialog.value = false
+                _updateState.value = UpdateState.Idle
+            } else {
+                _updateState.value = state
             }
         }
     }
 
-    /**
-     * 下载 APK 文件
-     * @param url 下载链接
-     * @param file 保存路径
-     */
-    suspend fun downloadApk(url: String, file: File) {
-        if (file.exists()) file.delete()
+    /** 用户取消下载（任务内的半截安装包由 Worker 负责清理） */
+    fun cancelUpdate(context: Context) {
+        cancelUpdateWork(context)
+    }
 
-        httpClient.get(url) {
-            onDownload { bytesSentTotal, contentLength ->
-                contentLength?.let {
-                    "下载进度：${(bytesSentTotal * 100) / contentLength}%".log()
-                }
-            }
-        }.bodyAsBytes().let {
-            file.writeBytes(it)
-        }
+    /** 关闭对话框后把下载阶段状态复位 */
+    fun resetUpdateState() {
+        _updateState.value = UpdateState.Idle
     }
 
     /**
@@ -150,21 +151,6 @@ class MainViewModel @Inject constructor(
      */
     fun dismissUpdateDialog() {
         _showVersionUpdateDialog.value = false
+        _updateState.value = UpdateState.Idle
     }
-
-    /**
-     * GitHub Release 数据模型
-     */
-    @Serializable
-    data class GitHubRelease(
-        @SerialName("tag_name") val tagName: String,    // 版本号，例如 "v1.1.0"
-        val name: String,                               // Release 名称
-        val body: String,                               // 更新日志
-        val assets: List<Asset>                         // 附件列表
-    )
-
-    @Serializable
-    data class Asset(
-        @SerialName("browser_download_url") val browserDownloadUrl: String  // 下载链接
-    )
 }

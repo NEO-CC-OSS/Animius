@@ -25,6 +25,24 @@ const val DOWNLOAD_DETAIL_TABLE = "download_detail_table"
 const val SEARCH_PAGE_SIZE = 10
 
 const val KEY_DOWNLOAD_UPDATE_URL = "downloadUpdateUrl"
+const val KEY_DOWNLOAD_UPDATE_SHA256 = "downloadUpdateSha256"
+const val KEY_DOWNLOAD_UPDATE_SIZE = "downloadUpdateSize"
+
+/** 后台更新任务失败原因（WorkManager outputData），用于 UI 给出对应的提示文案 */
+const val KEY_UPDATE_FAIL_REASON = "updateFailReason"
+
+/** 后台更新任务的下载进度（WorkManager progress）：百分比整数（-1 表示未知）与已下载字节数 */
+const val KEY_UPDATE_PROGRESS = "updateProgress"
+const val KEY_UPDATE_DOWNLOADED = "updateDownloaded"
+
+/** 更新任务在 WorkManager 中的唯一名称：两条入口（主页自动 / 时间表页手动）共用同一个任务，天然防重入 */
+const val UPDATE_WORK_NAME = "updateWork"
+
+// GitHub 加速镜像（GitHub 直连在国内时通时不通；下载/检查更新按顺序回退）
+val GITHUB_MIRROR_PREFIXES = listOf(
+    "https://gh-proxy.com/",
+    "https://gh-proxy.net/",
+)
 
 const val DefaultUserAgent =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"

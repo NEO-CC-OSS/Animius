@@ -8,11 +8,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -44,6 +46,7 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -85,11 +88,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.lanlinju.animius.R
 import com.lanlinju.animius.domain.model.Anime
+import com.lanlinju.animius.domain.model.UpdateState
 import com.lanlinju.animius.presentation.component.LoadingIndicator
 import com.lanlinju.animius.presentation.component.MediaSmall
 import com.lanlinju.animius.presentation.component.StateHandler
@@ -101,7 +106,6 @@ import com.lanlinju.animius.util.GITHUB_RELEASE_ADDRESS
 import com.lanlinju.animius.util.KEY_AUTO_ORIENTATION_ENABLED
 import com.lanlinju.animius.util.KEY_IS_AUTO_CHECK_UPDATE
 import com.lanlinju.animius.util.KEY_SOURCE_MODE
-import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.KEY_USE_DOWNLOAD_DIRECTORY
 import com.lanlinju.animius.util.SourceHolder
 import com.lanlinju.animius.util.SourceHolder.DEFAULT_ANIME_SOURCE
@@ -109,10 +113,11 @@ import com.lanlinju.animius.util.SourceMode
 import com.lanlinju.animius.util.TABS
 import com.lanlinju.animius.util.isAndroidTV
 import com.lanlinju.animius.util.isWideScreen
+import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.rememberPreference
+import java.time.LocalDate
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.time.LocalDate
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -128,6 +133,7 @@ fun WeekScreen(
     val weekDataState by viewModel.weekDataMap.collectAsState()
     val isUpdateAvailable by viewModel.isUpdateAvailable.collectAsState()
     val isUpdateCheckInProgress by viewModel.isUpdateCheckInProgress.collectAsState()
+    val updateState by viewModel.updateState.collectAsState()
     var showSourceSwitchDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showDomainChangeDialog by remember { mutableStateOf(false) }
@@ -227,6 +233,7 @@ fun WeekScreen(
         Dialogs(
             updateVersionName = { viewModel.updateVersionName },
             updateDescription = { viewModel.updateDescription },
+            updateState = updateState,
             showVersionUpdateDialog = isUpdateAvailable,
             showLoadingIndicationDialog = isUpdateCheckInProgress,
             showSourceSwitchDialog = showSourceSwitchDialog,
@@ -241,6 +248,7 @@ fun WeekScreen(
             onDownloadUpdate = { lifecycleOwner ->
                 viewModel.downloadVersionUpdate(context, lifecycleOwner)
             },
+            onCancelDownload = { viewModel.cancelUpdate(context) },
         )
     }
 
@@ -545,6 +553,7 @@ private data class MenuItemData(
 fun Dialogs(
     updateVersionName: () -> String,
     updateDescription: () -> String,
+    updateState: UpdateState,
     showSourceSwitchDialog: Boolean,
     showSettingsDialog: Boolean,
     showDomainChangeDialog: Boolean,
@@ -556,6 +565,7 @@ fun Dialogs(
     onDismissUpdateDialog: () -> Unit,
     onDismissLoadingIndicationDialog: () -> Unit,
     onDownloadUpdate: (LifecycleOwner) -> Unit,
+    onCancelDownload: () -> Unit,
     onRefresh: () -> Unit,
 ) {
     if (showSourceSwitchDialog) {
@@ -575,12 +585,15 @@ fun Dialogs(
             }
         }
     }
-    if (showVersionUpdateDialog) {
+    // 下载阶段（updateState 非 Idle）也要保持对话框显示，直到完成或用户关闭
+    if (showVersionUpdateDialog || updateState !is UpdateState.Idle) {
         VersionUpdateDialog(
             updateVersionName = updateVersionName(),
             updateDescription = updateDescription(),
+            updateState = updateState,
             onDismissUpdateDialog = onDismissUpdateDialog,
-            onDownloadUpdate = onDownloadUpdate
+            onDownloadUpdate = onDownloadUpdate,
+            onCancelDownload = onCancelDownload,
         )
     }
     if (showLoadingIndicationDialog) {
@@ -592,41 +605,135 @@ fun Dialogs(
 fun VersionUpdateDialog(
     updateVersionName: String,
     updateDescription: String,
+    updateState: UpdateState,
     onDismissUpdateDialog: () -> Unit,
     onDownloadUpdate: (LifecycleOwner) -> Unit,
+    onCancelDownload: () -> Unit,
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
+    // 下载阶段禁止误关（返回键/点击外部），避免用户不知道后台还在下载；完成或取消由调用方关闭
+    val inProgress = updateState is UpdateState.Preparing ||
+        updateState is UpdateState.Downloading ||
+        updateState is UpdateState.Verifying ||
+        updateState is UpdateState.Completed
 
     AlertDialog(
-        onDismissRequest = onDismissUpdateDialog,
+        onDismissRequest = { if (!inProgress) onDismissUpdateDialog() },
+        properties = DialogProperties(
+            dismissOnBackPress = !inProgress,
+            dismissOnClickOutside = !inProgress,
+        ),
         title = {
             Text(text = stringResource(id = R.string.software_updates))
         },
         text = {
-            val uriHandler = LocalUriHandler.current
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                Text(text = updateVersionName + "\n" + updateDescription)
-                Text(
-                    text = stringResource(R.string.github_release_address),
-                    color = MaterialTheme.colorScheme.primary,
-                    textDecoration = TextDecoration.Underline,
-                    modifier = Modifier
-                        .padding(top = dimensionResource(id = R.dimen.small_padding))
-                        .clickable { uriHandler.openUri(GITHUB_RELEASE_ADDRESS) }
-                )
+            when (updateState) {
+                is UpdateState.Idle -> UpdateDescriptionContent(updateVersionName, updateDescription)
+                is UpdateState.Preparing -> UpdateProgressRow(text = stringResource(R.string.update_preparing))
+                is UpdateState.Downloading -> UpdateDownloadProgress(updateState)
+                is UpdateState.Verifying -> UpdateProgressRow(text = stringResource(R.string.update_verifying))
+                is UpdateState.Failed -> Text(text = stringResource(updateFailReasonRes(updateState.reason)))
+                is UpdateState.Cancelled -> Text(text = stringResource(R.string.update_cancelled))
+                is UpdateState.Completed -> UpdateProgressRow(text = stringResource(R.string.update_installing))
             }
         },
         confirmButton = {
-            TextButton(onClick = { onDownloadUpdate(lifecycleOwner) }) {
-                Text(text = stringResource(id = R.string.download_software))
+            when (updateState) {
+                is UpdateState.Idle, is UpdateState.Failed -> {
+                    TextButton(onClick = { onDownloadUpdate(lifecycleOwner) }) {
+                        Text(
+                            text = stringResource(
+                                if (updateState is UpdateState.Failed) R.string.retry else R.string.download_software
+                            )
+                        )
+                    }
+                }
+                else -> {}
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismissUpdateDialog) {
-                Text(text = stringResource(id = R.string.cancel))
+            when (updateState) {
+                is UpdateState.Idle -> {
+                    TextButton(onClick = onDismissUpdateDialog) {
+                        Text(text = stringResource(id = R.string.cancel))
+                    }
+                }
+                is UpdateState.Preparing, is UpdateState.Downloading -> {
+                    TextButton(onClick = onCancelDownload) {
+                        Text(text = stringResource(id = R.string.cancel_download))
+                    }
+                }
+                is UpdateState.Failed, is UpdateState.Cancelled -> {
+                    TextButton(onClick = onDismissUpdateDialog) {
+                        Text(text = stringResource(id = R.string.close))
+                    }
+                }
+                else -> {}
             }
         }
     )
+}
+
+/** 版本说明（未开始下载时展示） */
+@Composable
+private fun UpdateDescriptionContent(versionName: String, description: String) {
+    val uriHandler = LocalUriHandler.current
+    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+        Text(text = versionName + "\n" + description)
+        Text(
+            text = stringResource(R.string.github_release_address),
+            color = MaterialTheme.colorScheme.primary,
+            textDecoration = TextDecoration.Underline,
+            modifier = Modifier
+                .padding(top = dimensionResource(id = R.dimen.small_padding))
+                .clickable { uriHandler.openUri(GITHUB_RELEASE_ADDRESS) }
+        )
+    }
+}
+
+/** 下载进度：有总长度时显示百分比与确定进度条，否则显示已下载量（不确定进度） */
+@Composable
+private fun UpdateDownloadProgress(state: UpdateState.Downloading) {
+    val percent = state.progress
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = if (percent != null) {
+                stringResource(R.string.update_downloading_percent, (percent * 100).toInt())
+            } else {
+                stringResource(R.string.update_downloading_unknown, state.downloadedBytes / 1024 / 1024)
+            }
+        )
+        Spacer(modifier = Modifier.height(dimensionResource(id = R.dimen.small_padding)))
+        if (percent != null) {
+            LinearProgressIndicator(progress = { percent }, modifier = Modifier.fillMaxWidth())
+        } else {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+/** 转圈 + 说明文字（准备中/校验中/调起安装） */
+@Composable
+private fun UpdateProgressRow(text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = dimensionResource(id = R.dimen.small_padding)),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator()
+        Spacer(modifier = Modifier.width(dimensionResource(id = R.dimen.small_padding)))
+        Text(text = text)
+    }
+}
+
+private fun updateFailReasonRes(reason: UpdateState.FailReason): Int = when (reason) {
+    UpdateState.FailReason.Network -> R.string.update_download_failed
+    UpdateState.FailReason.Checksum -> R.string.update_checksum_failed
+    UpdateState.FailReason.Signature -> R.string.update_signature_failed
+    UpdateState.FailReason.Install -> R.string.update_install_failed
+    UpdateState.FailReason.Unknown -> R.string.download_software_failed
 }
 
 @Composable

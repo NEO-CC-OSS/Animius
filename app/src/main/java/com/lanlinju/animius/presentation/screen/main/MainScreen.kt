@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.lanlinju.animius.domain.model.UpdateState
 import com.lanlinju.animius.presentation.component.AdaptiveNavigationBar
 import com.lanlinju.animius.presentation.component.NavigationBarPath
 import com.lanlinju.animius.presentation.screen.favourite.FavouriteScreen
@@ -43,6 +44,7 @@ fun MainScreen(
 ) {
     val viewModel = hiltViewModel<MainViewModel>()
     val showVersionUpdateDialog by viewModel.showVersionUpdateDialog.collectAsState()
+    val updateState by viewModel.updateState.collectAsState()
     // TV 优化：启动默认落在时间表页（用户拍板），侧栏顺序不变
     var currentDestination by rememberSaveable { mutableStateOf(NavigationBarPath.RSlash.route) }
     val pagerState = rememberPagerState(initialPage = 0) { NavigationBarPath.entries.size }
@@ -112,15 +114,15 @@ fun MainScreen(
         }
     }
 
-    if (showVersionUpdateDialog) {
+    // 下载阶段（updateState 非 Idle）也要保持对话框显示，直到完成或用户关闭
+    if (showVersionUpdateDialog || updateState !is UpdateState.Idle) {
         VersionUpdateDialog(
             updateVersionName = viewModel.updateVersionName,
             updateDescription = viewModel.updateDescription,
+            updateState = updateState,
             onDismissUpdateDialog = viewModel::dismissUpdateDialog,
-            onDownloadUpdate = {
-                viewModel.dismissUpdateDialog()
-                viewModel.downloadUpdate(context)
-            }
+            onDownloadUpdate = { owner -> viewModel.downloadUpdate(context, owner) },
+            onCancelDownload = { viewModel.cancelUpdate(context) },
         )
     }
 }
