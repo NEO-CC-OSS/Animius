@@ -18,7 +18,10 @@
   <tr>
     <td><img src="./image/tv/tv-home.jpg" alt="推荐页"/></td>
     <td><img src="./image/tv/tv-schedule.jpg" alt="时间表"/></td>
+  </tr>
+  <tr>
     <td><img src="./image/tv/tv-detail.jpg" alt="详情页"/></td>
+    <td><img src="./image/tv/tv-player.jpg" alt="播放与弹幕"/></td>
   </tr>
 </table>
 
