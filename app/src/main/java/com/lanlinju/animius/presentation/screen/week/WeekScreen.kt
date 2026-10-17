@@ -108,6 +108,7 @@ import com.lanlinju.animius.util.KEY_IS_AUTO_CHECK_UPDATE
 import com.lanlinju.animius.util.KEY_SOURCE_MODE
 import com.lanlinju.animius.util.KEY_USE_DOWNLOAD_DIRECTORY
 import com.lanlinju.animius.util.SourceHolder
+import com.lanlinju.animius.util.SOURCE_SUMMARY_UPDATED
 import com.lanlinju.animius.util.SourceHolder.DEFAULT_ANIME_SOURCE
 import com.lanlinju.animius.util.SourceMode
 import com.lanlinju.animius.util.TABS
@@ -265,7 +266,9 @@ fun WeekList(
     val context = LocalContext.current
     val isWideScreen = isWideScreen(context)
 
-    val useWeekItem = list.isEmpty() || list.first().img.isEmpty()
+    // 不再因"无封面"降级为文字卡片：无封面时 MediaSmall 显示占位底图（2026-10-14；
+    // Age动漫 周表站点本身不提供图，改后与其它源视觉统一）
+    val useWeekItem = list.isEmpty()
 
     // 判断使用的列数和布局宽度
     val columns = if (useWeekItem) {
@@ -766,8 +769,8 @@ private fun SourceSwitchDialog(
 ) {
     var currentSourceMode by rememberPreference(KEY_SOURCE_MODE, DEFAULT_ANIME_SOURCE)
 
-    val radioOptions = SourceMode.entries.map { it.name }
-    val (selectedOption, onOptionSelected) = remember { mutableStateOf(currentSourceMode.name) }
+    val radioOptions = SourceMode.entries
+    val (selectedOption, onOptionSelected) = remember { mutableStateOf(currentSourceMode) }
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -782,7 +785,7 @@ private fun SourceSwitchDialog(
                 verticalArrangement = Arrangement.spacedBy(MaterialTheme.padding.extraSmall)
             ) {
                 // TODO: 提取为组件
-                radioOptions.forEachIndexed { index, text ->
+                radioOptions.forEachIndexed { index, mode ->
                     val topCorner = if (index == 0) 24.dp else 4.dp
                     val bottomCorner = if (index == radioOptions.lastIndex) 24.dp else 4.dp
 
@@ -790,7 +793,7 @@ private fun SourceSwitchDialog(
                         Modifier
                             .tvFocus(shape = RoundedCornerShape(8.dp))
                             .fillMaxWidth()
-                            .height(dimensionResource(id = R.dimen.radio_button_height))
+                            .height(72.dp)
                             .clip(
                                 RoundedCornerShape(
                                     topStart = topCorner,
@@ -801,36 +804,49 @@ private fun SourceSwitchDialog(
                             )
                             .background(MaterialTheme.colorScheme.surfaceVariant)
                             .selectable(
-                                selected = (text == selectedOption),
-                                onClick = { onOptionSelected(text) },
+                                selected = (mode == selectedOption),
+                                onClick = { onOptionSelected(mode) },
                                 role = Role.RadioButton
                             )
                             .padding(start = dimensionResource(id = R.dimen.large_padding)),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         RadioButton(
-                            selected = (text == selectedOption),
+                            selected = (mode == selectedOption),
                             onClick = null
                         )
-                        Text(
-                            text = text,
-                            style = MaterialTheme.typography.bodyLarge,
+                        Column(
                             modifier = Modifier.padding(start = dimensionResource(id = R.dimen.medium_padding))
-                        )
+                        ) {
+                            Text(
+                                text = mode.name,
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                            Text(
+                                text = mode.summary,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
+                Text(
+                    text = "源信息更新于 $SOURCE_SUMMARY_UPDATED",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp, top = 4.dp),
+                )
             }
         },
         confirmButton = {
             TextButton(
                 modifier = Modifier.tvFocus(shape = CircleShape),
                 onClick = {
-                    val mode = SourceMode.valueOf(selectedOption)
-                    currentSourceMode = mode            // 保存默认源到偏好设置
-                    SourceHolder.isSourceChanged = true // 触发Home数据刷新
-                    SourceHolder.switchSource(mode)     // 切换数据源
-                    onDismissRequest()                  // 关闭Dialog
-                    onRefresh()                         // Week页面重新获取数据
+                    currentSourceMode = selectedOption      // 保存默认源到偏好设置
+                    SourceHolder.isSourceChanged = true     // 触发Home数据刷新
+                    SourceHolder.switchSource(selectedOption) // 切换数据源
+                    onDismissRequest()                      // 关闭Dialog
+                    onRefresh()                             // Week页面重新获取数据
                 }
             ) {
                 Text(stringResource(R.string.confirm))

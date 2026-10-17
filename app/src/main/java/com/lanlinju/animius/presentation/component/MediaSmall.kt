@@ -3,6 +3,7 @@ package com.lanlinju.animius.presentation.component
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -113,25 +114,37 @@ fun MediaSmall(
         ),
         shape = RoundedCornerShape(dimensionResource(Res.dimen.media_card_corner_radius)),
     ) {
-        AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(image)
-                .crossfade(CROSSFADE_DURATION)
-                .build(),
-            contentDescription = label,
-            contentScale = ContentScale.Crop,
-            // 加载失败兜底底图，避免黑块还能聚焦点击（P2-1）
-            error = painterResource(Res.drawable.background),
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(0.7f)
-                .clip(RoundedCornerShape(dimensionResource(Res.dimen.media_card_corner_radius))),
-            onSuccess = {
-                // 某些来源返回非位图（如矢量/GIF）时强转会崩，取不到位图就跳过取色回调
-                val bitmap = (it.result.drawable as? BitmapDrawable)?.bitmap
-                if (bitmap != null) onSuccess(bitmap)
-            }
-        )
+        val imageModifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(0.7f)
+            .clip(RoundedCornerShape(dimensionResource(Res.dimen.media_card_corner_radius)))
+        if (image.isNullOrBlank()) {
+            // 无封面（如 Age动漫 周表：站点本身不提供图）→ 直接画占位底图，避免留白
+            Image(
+                painter = painterResource(Res.drawable.background),
+                contentDescription = label,
+                contentScale = ContentScale.Crop,
+                modifier = imageModifier
+            )
+        } else {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(image)
+                    .crossfade(CROSSFADE_DURATION)
+                    .build(),
+                contentDescription = label,
+                contentScale = ContentScale.Crop,
+                // 仅"加载失败"兜底底图（P2-1）；不设 placeholder —— background.png 是横版，
+                // 用 ContentScale.Crop 填竖版卡片会被大幅裁剪放大，视觉跳变明显
+                error = painterResource(Res.drawable.background),
+                modifier = imageModifier,
+                onSuccess = {
+                    // 某些来源返回非位图（如矢量/GIF）时强转会崩，取不到位图就跳过取色回调
+                    val bitmap = (it.result.drawable as? BitmapDrawable)?.bitmap
+                    if (bitmap != null) onSuccess(bitmap)
+                }
+            )
+        }
 
         if (label != null)
             Box {

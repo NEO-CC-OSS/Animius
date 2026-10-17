@@ -105,7 +105,11 @@ object SilisiliSource : AnimeSource {
         val source = getHtml("$baseUrl/$detailUrl")
         val document = Jsoup.parse(source)
 
-        val title = document.select("h1.entry-title").text().split(" ").first()
+        // h1 内混有评分块（div.score-wrap，如 "10.0 ×6次评分"）；显式删掉再取完整标题，
+        // 不再用 split(" ") 截断（会误伤带空格的季数/副标题）
+        val titleEl = document.selectFirst("h1.entry-title")
+        titleEl?.select("div.score-wrap, span.score-wrap")?.remove()
+        val title = titleEl?.text().orEmpty()
         val img = document.select("div.v_sd_l > img").attr("src")
         val tags = document.select("p.data").select("a")
 

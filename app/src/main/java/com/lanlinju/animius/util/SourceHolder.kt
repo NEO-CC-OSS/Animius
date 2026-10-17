@@ -88,15 +88,19 @@ object SourceHolder {
     }
 }
 
-enum class SourceMode {
+/** 源备注依据的体检日期；更新备注时同步修改此值 */
+const val SOURCE_SUMMARY_UPDATED = "2026-10-17"
+
+enum class SourceMode(val summary: String) {
     // 2026-10-11 樱之空实测全绿、更新最快，设为默认源并置顶列表（用户拍板）
-    Skr,
-    Silisili,
-    Agedm,
-    Girigiri,
+    // 备注依据 2026-10-17 体检结论，随版本更新；不按实时分数动态排序（源状态波动大）
+    Skr("更新快、画质稳，推荐首选"),
+    Silisili("资源多，弹幕偶尔偏少"),
+    Agedm("稳定，资源较全"),
+    Girigiri("整体可用，晚间偶尔连不上"),
     // Cycanime,
-    Gugufan,
-    Jzacg,
+    Gugufan("近期打不开，暂不推荐"),
+    Jzacg("新番全，个别线路偶尔失败"),
     // Mxdm,
     // Xifan,
     // Ntdm,

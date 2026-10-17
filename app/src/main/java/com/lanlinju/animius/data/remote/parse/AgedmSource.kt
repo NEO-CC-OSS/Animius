@@ -134,11 +134,19 @@ object AgedmSource : AnimeSource {
     }
 
     private suspend fun getVideoUrl(document: Document): String {
-
-        val videoUrl = document.select("#iframeForVideo").attr("src")
-
+        val iframeUrl = document.select("#iframeForVideo").attr("src")
+        if (iframeUrl.isBlank()) {
+            error("Age动漫：该条目在网页端不提供播放（站点内容限制，如版权下架）")
+        }
+        // /m3u8/ 明文线路：解析器页直接暴露 var Vurl，HTTP 直取即可
+        // （hls.js 经 XHR 拉 m3u8，WebView 的 onLoadResource 对 XHR 不可靠，故不走拦截）
+        if (iframeUrl.contains("/m3u8/")) {
+            val page = DownloadManager.getHtml(iframeUrl)
+            Regex("var Vurl = '([^']+)'").find(page)?.groupValues?.get(1)?.let { return it }
+        }
+        // /vip/ 等加密线路：交 WebView 执行（WASM 签名无法纯 HTTP 解）
         return webViewUtil.interceptRequest(
-            url = videoUrl,
+            url = iframeUrl,
             regex = ".mp4|.m3u8|video|playurl|hsl|obj|bili",
         )
     }

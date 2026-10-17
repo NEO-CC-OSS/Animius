@@ -28,8 +28,8 @@ import javax.crypto.spec.SecretKeySpec
  *
  * 2026-10-11 接入取证（tools/source_probe.py、源站评测报告-20261011.md）：
  * - 苹果CMS「神马MV版」模板，首页/详情/播放页为服务端渲染，可纯解析
- * - 搜索页/分类列表页/周表页均为 JS 渲染（服务端无数据）：搜索用 suggest 联想接口降级
- *   （联想式匹配，覆盖有限）；周表返回空
+ * - 搜索页/分类列表页为 JS 渲染（服务端无数据）：搜索用 suggest 联想接口降级（联想式匹配，覆盖有限）
+ * - 周表：首页 #week-module-box 为服务端渲染、静态可解析（2026-10-14 修正，详见 getWeekData）
  * - 播放取址为原生直解（2026-10-11 二次取证并 python 端到端验证，替代初版 WebView 方案）：
  *   播放页 player_aaaa.url 为轮换密文 → 站方 cloudplay 中转页（ps=1 线路走 parse 域）→
  *   中转页内 config.url（AES 密文）+ 两个轮换 meta id → 按 id 派生 AES-128-CBC 密钥解出
@@ -159,9 +159,11 @@ class JzacgSource : AnimeSource {
             error("橘子：云端线路暂不可用（站点侧故障），请稍后重试")
         }
         val cloudDoc = Jsoup.parse(cloudplayHtml)
-        val configJson = CONFIG_DATA_REGEX.find(cloudplayHtml)?.groupValues?.get(1)
+        // config 现含嵌套对象 + 单引号（非严格 JSON，2026-10-14 站方改版）→ 按括号平衡提取后正则取主 url，
+        // 不再整体 json 解析（原非贪婪正则 + Json 严格解析会双双失败）
+        val configText = extractJsObject(cloudplayHtml, "var config")
             ?: error("橘子：播放中转页未找到 config 数据")
-        val aesCipherText = Json.parseToJsonElement(configJson).jsonObject["url"]?.jsonPrimitive?.content
+        val aesCipherText = CONFIG_URL_REGEX.find(configText)?.groupValues?.get(1)
             ?: error("橘子：播放中转页 config 缺少 url 字段")
         val chars = cloudDoc.select("meta[name=viewport]").attr("id").removePrefix(META_ID_PREFIX)
         val digits = cloudDoc.select("meta[charset]").attr("id").removePrefix(META_ID_PREFIX)
@@ -239,7 +241,31 @@ class JzacgSource : AnimeSource {
      * 站方周表页与数据接口均为 JS 渲染且 API 参数未破出（2026-10-11 取证），纯解析不可得，
      * 返回空：时间表页对本源显示空白，时间表数据请使用其他源。
      */
-    override suspend fun getWeekData(): Map<Int, List<AnimeBean>> = emptyMap()
+    /**
+     * 周表：首页 `#week-module-box` 内 7 个 `div.public-r`（对应周一~周日），结构同首页卡片。
+     * 2026-10-14 修正：此前记"周表页 JS 渲染取不到、返回空"——那是 `/label/weekday/` 页面；
+     * 首页的周表模块是服务端渲染，静态可解析（实测 7 天共 40 条、每条含封面）。
+     */
+    override suspend fun getWeekData(): Map<Int, List<AnimeBean>> = withRetry {
+        val document = getDocument(baseUrl)
+        val weekMap = mutableMapOf<Int, List<AnimeBean>>()
+        document.select("div#week-module-box div.public-r").forEachIndexed { index, element ->
+            weekMap[index] = element.select("div.public-list-box").mapNotNull { el ->
+                val a = el.selectFirst("a.public-list-exp") ?: return@mapNotNull null
+                val url = a.attr("href")
+                if (!url.contains("/media/")) return@mapNotNull null
+                val title = a.attr("title").ifEmpty { el.select("div.public-list-button > a").text() }
+                if (title.isEmpty()) return@mapNotNull null
+                AnimeBean(
+                    title = title,
+                    img = el.select("img").attr("data-src"),
+                    url = url,
+                    episodeName = el.select("span.public-list-prb").text()
+                )
+            }
+        }
+        weekMap
+    }
 
     /** 站点连接抖动频繁（DNS 失败/RST 实测频发）：统一重试，CancellationException 必须重抛 */
     private suspend fun <T> withRetry(block: suspend () -> T): T {
@@ -257,13 +283,41 @@ class JzacgSource : AnimeSource {
         throw lastError ?: IllegalStateException("橘子：请求重试耗尽")
     }
 
+    /** 从 text 中 marker 后第一个 '{' 起按括号平衡提取完整 JS 对象（容忍嵌套对象/单引号等非严格 JSON） */
+    private fun extractJsObject(text: String, marker: String): String? {
+        val start = text.indexOf(marker)
+        if (start < 0) return null
+        val open = text.indexOf('{', start)
+        if (open < 0) return null
+        var depth = 0
+        var inStr: Char? = null
+        var i = open
+        while (i < text.length) {
+            val c = text[i]
+            if (inStr != null) {
+                if (c == '\\') { i += 2; continue }
+                if (c == inStr) inStr = null
+            } else {
+                when (c) {
+                    '"', '\'' -> inStr = c
+                    '{' -> depth++
+                    '}' -> { depth--; if (depth == 0) return text.substring(open, i + 1) }
+                }
+            }
+            i++
+        }
+        return null
+    }
+
     private fun md5Hex(input: String): String =
         MessageDigest.getInstance("MD5").digest(input.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
 
     private companion object {
         val PLAYER_DATA_REGEX = Regex("""player_aaaa\s*=\s*(\{.*?\})\s*[;<]""", RegexOption.DOT_MATCHES_ALL)
-        val CONFIG_DATA_REGEX = Regex("""var\s+config\s*=\s*(\{.*?\})""", RegexOption.DOT_MATCHES_ALL)
+
+        /** 中转页 config 的主 url 字段（双引号值；ad 块的 url 为单引号空串，不会误匹配） */
+        val CONFIG_URL_REGEX = Regex("\"url\"\\s*:\\s*\"([^\"]+)\"")
         const val META_ID_PREFIX = "now_"
         const val DECRYPT_SALT = "Mknacg123321"
         const val REQUEST_RETRY_TIMES = 3

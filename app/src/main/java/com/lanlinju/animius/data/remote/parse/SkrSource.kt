@@ -7,13 +7,15 @@ import com.lanlinju.animius.data.remote.dto.HomeBean
 import com.lanlinju.animius.data.remote.dto.VideoBean
 import com.lanlinju.animius.util.DownloadManager
 import com.lanlinju.animius.util.getDefaultDomain
-import com.lanlinju.animius.util.getDocument
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.security.MessageDigest
 import java.util.Base64
 
 /**
@@ -34,8 +36,46 @@ class SkrSource : AnimeSource {
     /** 两站 href 均带前导斜杠，统一在此拼接，避免 Gugufan 式 "$baseUrl/$url" 的双斜杠 */
     private fun fullUrl(path: String): String = baseUrl.trimEnd('/') + path
 
+    /**
+     * 站方自 2026-10-15 起对纯 HTTP 请求弹人机验证（403 + renji_*.js）。
+     * 验证本身是纯请求式的：解析 JS 里的 key/value/type → md5(ASCII 码拼接) → GET yanzheng_ip.php，
+     * 服务端 Set-Cookie 后放行。ktor 的 HttpCookies 会在进程内自动保存并回带该 cookie。
+     */
+    private suspend fun fetchHtml(url: String, headers: Map<String, String> = emptyMap()): String {
+        val html = DownloadManager.getHtml(url, headers)
+        if (!isVerifyPage(html) || !passVerification(html)) return html
+        return DownloadManager.getHtml(url, headers)
+    }
+
+    private suspend fun fetchDocument(url: String): Document = Jsoup.parse(fetchHtml(url))
+
+    private fun isVerifyPage(html: String): Boolean =
+        html.contains("bt-info") && html.contains("renji_")
+
+    private suspend fun passVerification(page: String): Boolean {
+        val jsPath = VERIFY_JS_SRC_REGEX.find(page)?.groupValues?.get(1) ?: return false
+        val js = DownloadManager.getHtml(fullUrl(jsPath), mapOf("Referer" to baseUrl))
+        val key = VERIFY_KEY_REGEX.find(js)?.groupValues?.get(1) ?: return false
+        val value = VERIFY_VALUE_REGEX.find(js)?.groupValues?.get(1) ?: return false
+        val type = VERIFY_TYPE_REGEX.find(js)?.groupValues?.get(1) ?: return false
+        val path = VERIFY_PATH_REGEX.find(js)?.groupValues?.get(1) ?: return false
+        // 站方 JS 的 stringtoHex 实际是把每个字符的 charCode 十进制拼接（不是十六进制）
+        val sig = md5(value.map { it.code.toString() }.joinToString(""))
+        val verifyUrl = fullUrl(path.substringBefore("?")) + "?type=$type&key=$key&value=$sig"
+        val resp = DownloadManager.getHtml(
+            verifyUrl,
+            mapOf("Referer" to baseUrl, "X-Requested-With" to "XMLHttpRequest"),
+        )
+        return resp.isNotEmpty()
+    }
+
+    private fun md5(input: String): String =
+        MessageDigest.getInstance("MD5")
+            .digest(input.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+
     override suspend fun getHomeData(): List<HomeBean> {
-        val document = getDocument(baseUrl)
+        val document = fetchDocument(baseUrl)
         val homeBeanList = mutableListOf<HomeBean>()
         document.select("div.pannel.clearfix").forEach { panel ->
             // 仅抓带通用条目列表的区块；"换一换"隐藏组（.cbox2/.cbox3.hide）不在 ul.vodlist_sy 内，天然排除
@@ -71,7 +111,7 @@ class SkrSource : AnimeSource {
         // 实测结构（2026-10-11 取证）：ul.vodlist_sjb 包在 div.vodlist_smt 内，归属由其前兄弟
         // div.pannel_head 内 h2.title 文本（周一..周日）决定。day1 的 id 挂在 <body> 上、"上季完结"
         // 区块无星期，均不能按 id 或 DOM 顺序假设，故按标题文本映射
-        val document = getDocument(fullUrl("/vodtype/22/"))
+        val document = fetchDocument(fullUrl("/vodtype/22/"))
         val weekMap = mutableMapOf<Int, List<AnimeBean>>()
         document.select("ul.vodlist_sjb").forEach { ul ->
             val weekIndex = weekIndexOf(ul) ?: return@forEach
@@ -94,7 +134,7 @@ class SkrSource : AnimeSource {
         if (page > 1) return emptyList()
         val kw = URLEncoder.encode(query, "UTF-8")
         // 搜索地址必须为「关键词 + 13 个横杠」且不带 .html 后缀，否则 302 回首页
-        val document = getDocument(fullUrl("/vodsearch/$kw-------------/"))
+        val document = fetchDocument(fullUrl("/vodsearch/$kw-------------/"))
         if (document.selectFirst("li.searchlist_item") == null) return emptyList()
         return document.select("li.searchlist_item").mapNotNull { item ->
             val a = item.selectFirst("a.vodlist_thumb") ?: return@mapNotNull null
@@ -107,7 +147,7 @@ class SkrSource : AnimeSource {
     }
 
     override suspend fun getAnimeDetail(detailUrl: String): AnimeDetailBean {
-        val document = getDocument(fullUrl(detailUrl))
+        val document = fetchDocument(fullUrl(detailUrl))
         val title = document.select(".content_detail.content_top h1.title").text()
         val imgUrl = document.select(".content_thumb a.vodlist_thumb").attr("data-original")
         val desc = document.select(".content_desc.context span").text()
@@ -158,7 +198,7 @@ class SkrSource : AnimeSource {
     }
 
     override suspend fun getVideoData(episodeUrl: String): VideoBean {
-        val html = DownloadManager.getHtml(fullUrl(episodeUrl))
+        val html = fetchHtml(fullUrl(episodeUrl))
         val jsonText = PLAYER_DATA_REGEX.find(html)?.groupValues?.get(1)
             ?: error("樱之空：播放页未找到 player_aaaa 数据")
         // url 字段 = base64(urlencode(m3u8))；不依赖 encrypt 字段（实测不同页面存在数字/字符串两种形态）
@@ -174,6 +214,13 @@ class SkrSource : AnimeSource {
 
     private companion object {
         val PLAYER_DATA_REGEX = Regex("""player_aaaa\s*=\s*(\{.*?\})\s*[;<]""", RegexOption.DOT_MATCHES_ALL)
+
+        // 人机验证页（2026-10-15 起）：renji_*.js 内含 key/value/type 与验证接口路径
+        val VERIFY_JS_SRC_REGEX = Regex("""src="([^"]*renji_[^"]*\.js[^"]*)"""")
+        val VERIFY_KEY_REGEX = Regex("""key="([0-9a-f]+)"""")
+        val VERIFY_VALUE_REGEX = Regex("""value="([0-9a-f]+)"""")
+        val VERIFY_TYPE_REGEX = Regex("""type=([0-9a-f]+)&key=""")
+        val VERIFY_PATH_REGEX = Regex("""c\.get\("([^"]+)"""")
 
         // 时间表页每天区块的 h2 标题 → WeekScreen 页序（0=周一 .. 6=周日）
         val WEEK_LABEL_INDEX = mapOf(
