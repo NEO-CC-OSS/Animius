@@ -11,6 +11,7 @@ import com.lanlinju.animius.domain.model.UpdateState
 import com.lanlinju.animius.domain.repository.AnimeRepository
 import com.lanlinju.animius.util.Resource
 import com.lanlinju.animius.util.fetchLatestRelease
+import com.lanlinju.animius.util.isNewerTvVersion
 import com.lanlinju.animius.util.toast
 import com.lanlinju.animius.work.cancelUpdateWork
 import com.lanlinju.animius.work.enqueueUpdateWork
@@ -80,8 +81,8 @@ class WeekViewModel @Inject constructor(
                 this@WeekViewModel.updateDescription = release.body
                 this@WeekViewModel.updateVersionName = release.tagName
 
-                val curVersionName = "v${BuildConfig.VERSION_NAME}"
-                val isUpdateVersion = updateVersionName != curVersionName
+                // 仅当线上 tv 序号高于本地时才提示（避免装测试包/降级时误报）
+                val isUpdateVersion = isNewerTvVersion(release.tagName, BuildConfig.VERSION_NAME)
 
                 _isUpdateCheckInProgress.value = false
                 _isUpdateAvailable.value = isUpdateVersion

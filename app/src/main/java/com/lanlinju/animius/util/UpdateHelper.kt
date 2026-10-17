@@ -52,6 +52,38 @@ sealed interface UpdateDownloadResult {
     object SignatureMismatch : UpdateDownloadResult
 }
 
+/**
+ * 判断线上 tag 是否比本地版本更新。
+ *
+ * 版本格式：`v1.3.5-tv.N` ↔ `1.3.5-tv.N`。只认本项目带 `-tv.` 的发布版，
+ * 避免把上游同基础版本（`v1.3.5`，签名不同装不上）误判为更新。
+ * 基础版本按数字段比较，相同再比 tv 序号；线上不高于本地时一律不提示。
+ */
+fun isNewerTvVersion(remoteTag: String, localVersionName: String): Boolean {
+    val remote = parseTvVersion(remoteTag) ?: return false
+    val local = parseTvVersion(localVersionName) ?: return false
+    return compareTvVersion(remote, local) > 0
+}
+
+private data class TvVersion(val base: List<Int>, val tv: Int)
+
+private fun parseTvVersion(raw: String): TvVersion? {
+    val text = raw.trim().removePrefix("v")
+    val match = Regex("""^(\d+(?:\.\d+)*)-tv\.(\d+)$""").find(text) ?: return null
+    val base = match.groupValues[1].split('.').map { it.toIntOrNull() ?: return null }
+    val tv = match.groupValues[2].toIntOrNull() ?: return null
+    return TvVersion(base, tv)
+}
+
+private fun compareTvVersion(a: TvVersion, b: TvVersion): Int {
+    val size = maxOf(a.base.size, b.base.size)
+    for (i in 0 until size) {
+        val diff = a.base.getOrElse(i) { 0 } - b.base.getOrElse(i) { 0 }
+        if (diff != 0) return diff
+    }
+    return a.tv - b.tv
+}
+
 private const val TAG = "UpdateHelper"
 
 private val updateJson = Json { ignoreUnknownKeys = true }

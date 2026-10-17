@@ -12,6 +12,7 @@ import com.lanlinju.animius.util.GitHubRelease
 import com.lanlinju.animius.util.KEY_IS_AUTO_CHECK_UPDATE
 import com.lanlinju.animius.util.KEY_LAST_CHECK_UPDATE_TIME
 import com.lanlinju.animius.util.fetchLatestRelease
+import com.lanlinju.animius.util.isNewerTvVersion
 import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.preferenceForBoolean
 import com.lanlinju.animius.util.preferenceForLong
@@ -98,10 +99,8 @@ class MainViewModel @Inject constructor(
             this.updateDescription = release.body
             this.updateVersionName = release.tagName
 
-            // 获取当前应用版本号
-            val curVersionName = "v${BuildConfig.VERSION_NAME}"
-            // 判断是否为新版本
-            val isUpdateVersion = updateVersionName != curVersionName
+            // 仅当线上 tv 序号高于本地时才提示（避免装测试包/降级时误报）
+            val isUpdateVersion = isNewerTvVersion(release.tagName, BuildConfig.VERSION_NAME)
 
             // 更新对话框状态
             _showVersionUpdateDialog.value = isUpdateVersion
