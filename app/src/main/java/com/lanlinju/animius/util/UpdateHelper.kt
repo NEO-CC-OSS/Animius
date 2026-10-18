@@ -177,18 +177,25 @@ fun isApkSignatureTrusted(context: Context, apkFile: File): Boolean {
     return try {
         val pm = context.packageManager
         val installedSigs = installedSignatureDigests(context) ?: return true
-        val archiveInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            pm.getPackageArchiveInfo(
-                apkFile.absolutePath,
-                PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong()),
-            )
+        // API 26/27 没有 PackageInfo.signingInfo，也没有 GET_SIGNING_CERTIFICATES，
+        // 必须走旧的 GET_SIGNATURES，否则取不到签名，更新会被误判为签名异常。
+        val archiveSigs: Set<String>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val archiveInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageArchiveInfo(
+                    apkFile.absolutePath,
+                    PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong()),
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.GET_SIGNING_CERTIFICATES)
+            }
+            archiveInfo?.signingInfo?.apkContentsSigners?.map { it.toCharsString() }?.toSet()
         } else {
             @Suppress("DEPRECATION")
-            pm.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.GET_SIGNING_CERTIFICATES)
+            pm.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.GET_SIGNATURES)
+                ?.signatures?.map { it.toCharsString() }?.toSet()
         }
-        val archiveSigs = archiveInfo?.signingInfo?.apkContentsSigners
-            ?.map { it.toCharsString() }?.toSet()
-            ?: return false
+        "签名校验: SDK=${Build.VERSION.SDK_INT}, installed=${installedSigs.size}, archive=${archiveSigs?.size ?: -1}".log(TAG)
         installedSigs.isNotEmpty() && installedSigs == archiveSigs
     } catch (e: Exception) {
         e.message?.log("verifyApk: ")
