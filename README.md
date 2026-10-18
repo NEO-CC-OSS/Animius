@@ -6,7 +6,7 @@
 
 **轻量、无广告、遥控器优先的 Android TV 动漫播放器**
 
-约 4.6 MB · Android 8.0+ · 不要求 Google TV 认证 · 支持弹幕
+约 4.6 MB · Android 8.0+ · 支持弹幕
 
 [![Release](https://img.shields.io/github/v/release/NEO-CC-OSS/Animius?style=flat-square)](https://github.com/NEO-CC-OSS/Animius/releases/latest)
 [![APK](https://img.shields.io/badge/APK-4.6%20MB-blue?style=flat-square)](https://github.com/NEO-CC-OSS/Animius/releases/latest)
@@ -30,8 +30,6 @@
 
 ## 🎯 项目定位
 
-这个分支不做“大而全”，只围绕五条原则做取舍：
-
 | 原则 | 具体做法 |
 |---|---|
 | **轻量** | 安装包约 4.6 MB；无广告 SDK、无后台常驻服务、不依赖 Google 服务框架。 |
@@ -39,10 +37,6 @@
 | **TV 大屏** | 布局、字号、焦点按远距离观看设计，不把手机界面直接放大。 |
 | **遥控器优先** | 方向键焦点、焦点描边、焦点记忆、长按操作、播放器直控；不设计必须触摸才能用的功能。 |
 | **弹幕** | 接入[弹弹play 开放弹幕网络](https://www.dandanplay.com)，集数智能匹配；加载失败时说明原因，而不是静默消失。 |
-
-一句话：**让老电视和盒子，用遥控器也能顺畅地看番、看弹幕。**
-
-> 新增功能前先过五问：包体是否明显变大？是否抬高系统门槛？是否要求 Google 服务？是否破坏遥控器焦点？是否影响弹幕匹配？任一答案不理想，就不做。
 
 ## ✨ 功能特性
 
@@ -77,12 +71,6 @@
 | Google 服务框架（GMS） | 不需要 |
 
 ## ❓ 常见问题
-
-**为什么安装包这么小？**
-没有广告 SDK、没有多平台运行时、没有后台常驻服务。功能按 TV 场景取舍，优先保证老设备上的安装和启动开销。
-
-**为什么不需要 Google TV 认证？**
-应用没有把 Leanback 作为必需特性，普通 Android 电视和盒子可以直接安装。部分 Android TV 桌面只展示经过 Leanback 认证的应用；如果桌面找不到图标，可从系统「应用」列表启动，Leanback 桌面入口正在补。
 
 **弹幕不显示？**
 弹幕来自弹弹play 开放平台，需要设备能正常联网。部分冷门剧集可能未被弹幕库收录，此时会提示「未匹配」；网络或鉴权异常也会分别提示原因。
