@@ -11,3 +11,6 @@ local.properties
 release/
 /.kotlin
 debug/
+build.log
+test.log
+keystore.jks
