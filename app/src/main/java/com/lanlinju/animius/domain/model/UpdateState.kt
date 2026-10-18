@@ -24,8 +24,8 @@ sealed interface UpdateState {
     /** 下载完成，正在校验安装包（哈希 + 签名） */
     object Verifying : UpdateState
 
-    /** 失败，需用户选择重试或关闭 */
-    data class Failed(val reason: FailReason) : UpdateState
+    /** 失败，需用户选择重试或关闭；[detail] 为诊断用的异常摘要 */
+    data class Failed(val reason: FailReason, val detail: String? = null) : UpdateState
 
     /** 用户主动取消 */
     object Cancelled : UpdateState

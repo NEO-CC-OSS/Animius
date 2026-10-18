@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.lifecycle.LifecycleOwner
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
@@ -13,6 +12,7 @@ import com.lanlinju.animius.util.KEY_DOWNLOAD_UPDATE_SHA256
 import com.lanlinju.animius.util.KEY_DOWNLOAD_UPDATE_SIZE
 import com.lanlinju.animius.util.KEY_DOWNLOAD_UPDATE_URL
 import com.lanlinju.animius.util.KEY_UPDATE_DOWNLOADED
+import com.lanlinju.animius.util.KEY_UPDATE_ERROR_DETAIL
 import com.lanlinju.animius.util.KEY_UPDATE_FAIL_REASON
 import com.lanlinju.animius.util.KEY_UPDATE_PROGRESS
 import com.lanlinju.animius.util.UPDATE_WORK_NAME
@@ -26,8 +26,9 @@ import com.lanlinju.animius.util.UPDATE_WORK_NAME
 
 /** 入队更新任务（已有任务在跑时忽略本次请求，避免并发重复下载） */
 fun enqueueUpdateWork(context: Context, url: String, sha256: String?, size: Long) {
+    // 不使用 setExpedited：旧电视上加急任务会走前台服务，部分 ROM 会直接失败，
+    // 而 WorkManager 只把结果记为 FAILED、不保留原因（UI 显示“下载更新失败”）。
     val request = OneTimeWorkRequestBuilder<UpdateWorker>()
-        .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
         .setInputData(
             workDataOf(
                 KEY_DOWNLOAD_UPDATE_URL to url,
@@ -71,7 +72,10 @@ private fun WorkInfo.toUpdateState(): UpdateState = when (state) {
         }
     }
     WorkInfo.State.SUCCEEDED -> UpdateState.Completed
-    WorkInfo.State.FAILED -> UpdateState.Failed(parseFailReason(outputData.getString(KEY_UPDATE_FAIL_REASON)))
+    WorkInfo.State.FAILED -> UpdateState.Failed(
+        reason = parseFailReason(outputData.getString(KEY_UPDATE_FAIL_REASON)),
+        detail = outputData.getString(KEY_UPDATE_ERROR_DETAIL),
+    )
     WorkInfo.State.CANCELLED -> UpdateState.Cancelled
 }
 

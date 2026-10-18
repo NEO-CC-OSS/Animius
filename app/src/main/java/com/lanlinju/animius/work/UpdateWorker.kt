@@ -10,6 +10,7 @@ import com.lanlinju.animius.util.KEY_DOWNLOAD_UPDATE_SHA256
 import com.lanlinju.animius.util.KEY_DOWNLOAD_UPDATE_SIZE
 import com.lanlinju.animius.util.KEY_DOWNLOAD_UPDATE_URL
 import com.lanlinju.animius.util.KEY_UPDATE_DOWNLOADED
+import com.lanlinju.animius.util.KEY_UPDATE_ERROR_DETAIL
 import com.lanlinju.animius.util.KEY_UPDATE_FAIL_REASON
 import com.lanlinju.animius.util.KEY_UPDATE_PROGRESS
 import com.lanlinju.animius.util.UpdateDownloadResult
@@ -25,7 +26,12 @@ class UpdateWorker(appContext: Context, workerParams: WorkerParameters) :
     CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
-        val url = inputData.getString(KEY_DOWNLOAD_UPDATE_URL) ?: return Result.failure()
+        val url = inputData.getString(KEY_DOWNLOAD_UPDATE_URL) ?: return Result.failure(
+            workDataOf(
+                KEY_UPDATE_FAIL_REASON to UpdateState.FailReason.Unknown.name,
+                KEY_UPDATE_ERROR_DETAIL to "更新地址为空",
+            )
+        )
         val sha256 = inputData.getString(KEY_DOWNLOAD_UPDATE_SHA256)?.takeIf { it.isNotBlank() }
         val size = inputData.getLong(KEY_DOWNLOAD_UPDATE_SIZE, 0L)
 
@@ -82,10 +88,15 @@ class UpdateWorker(appContext: Context, workerParams: WorkerParameters) :
                 // 用户取消下载：清理半截安装包后向上抛出（WorkManager 会记为 CANCELLED）
                 file.delete()
                 throw e
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 e.message?.log("UpdateWorker: ")
                 file.delete()
-                Result.failure(workDataOf(KEY_UPDATE_FAIL_REASON to UpdateState.FailReason.Unknown.name))
+                Result.failure(
+                    workDataOf(
+                        KEY_UPDATE_FAIL_REASON to UpdateState.FailReason.Unknown.name,
+                        KEY_UPDATE_ERROR_DETAIL to e.stackTraceToString().take(1200),
+                    )
+                )
             }
         }
     }

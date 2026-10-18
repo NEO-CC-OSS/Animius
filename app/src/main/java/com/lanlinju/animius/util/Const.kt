@@ -31,6 +31,9 @@ const val KEY_DOWNLOAD_UPDATE_SIZE = "downloadUpdateSize"
 /** 后台更新任务失败原因（WorkManager outputData），用于 UI 给出对应的提示文案 */
 const val KEY_UPDATE_FAIL_REASON = "updateFailReason"
 
+/** 更新任务失败时的异常详情（诊断用，UI 原样展示） */
+const val KEY_UPDATE_ERROR_DETAIL = "updateErrorDetail"
+
 /** 后台更新任务的下载进度（WorkManager progress）：百分比整数（-1 表示未知）与已下载字节数 */
 const val KEY_UPDATE_PROGRESS = "updateProgress"
 const val KEY_UPDATE_DOWNLOADED = "updateDownloaded"

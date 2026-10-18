@@ -635,7 +635,11 @@ fun VersionUpdateDialog(
                 is UpdateState.Preparing -> UpdateProgressRow(text = stringResource(R.string.update_preparing))
                 is UpdateState.Downloading -> UpdateDownloadProgress(updateState)
                 is UpdateState.Verifying -> UpdateProgressRow(text = stringResource(R.string.update_verifying))
-                is UpdateState.Failed -> Text(text = stringResource(updateFailReasonRes(updateState.reason)))
+                is UpdateState.Failed -> {
+                    val base = stringResource(updateFailReasonRes(updateState.reason))
+                    val detail = updateState.detail
+                    Text(text = if (detail.isNullOrBlank()) base else "$base\n\n$detail")
+                }
                 is UpdateState.Cancelled -> Text(text = stringResource(R.string.update_cancelled))
                 is UpdateState.Completed -> UpdateProgressRow(text = stringResource(R.string.update_installing))
             }
