@@ -52,6 +52,9 @@ android {
                 storePassword = it
                 keyAlias = System.getenv("KEY_ALIAS")
                 keyPassword = System.getenv("KEY_PASSWORD")
+                // Android 8.x 的 GET_SIGNATURES 读不到 v2-only 包，更新签名校验会误判；
+                // 保留 v1（JAR）签名，保证旧系统也能读到与安装包一致的证书。
+                enableV1Signing = true
             }
         }
     }
