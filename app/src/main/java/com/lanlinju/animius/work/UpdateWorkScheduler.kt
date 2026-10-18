@@ -15,6 +15,7 @@ import com.lanlinju.animius.util.KEY_UPDATE_DOWNLOADED
 import com.lanlinju.animius.util.KEY_UPDATE_ERROR_DETAIL
 import com.lanlinju.animius.util.KEY_UPDATE_FAIL_REASON
 import com.lanlinju.animius.util.KEY_UPDATE_PROGRESS
+import com.lanlinju.animius.util.KEY_UPDATE_SPEED
 import com.lanlinju.animius.util.UPDATE_WORK_NAME
 
 /**
@@ -65,10 +66,19 @@ private fun WorkInfo.toUpdateState(): UpdateState = when (state) {
     WorkInfo.State.RUNNING -> {
         val percent = progress.getInt(KEY_UPDATE_PROGRESS, -1)
         val downloaded = progress.getLong(KEY_UPDATE_DOWNLOADED, 0L)
+        val speed = progress.getLong(KEY_UPDATE_SPEED, 0L).takeIf { it > 0 }
         when {
-            percent < 0 -> UpdateState.Downloading(progress = null, downloadedBytes = downloaded)
+            percent < 0 -> UpdateState.Downloading(
+                progress = null,
+                downloadedBytes = downloaded,
+                speedBytesPerSec = speed,
+            )
             percent >= 100 -> UpdateState.Verifying
-            else -> UpdateState.Downloading(progress = percent / 100f, downloadedBytes = downloaded)
+            else -> UpdateState.Downloading(
+                progress = percent / 100f,
+                downloadedBytes = downloaded,
+                speedBytesPerSec = speed,
+            )
         }
     }
     WorkInfo.State.SUCCEEDED -> UpdateState.Completed

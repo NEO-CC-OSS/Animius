@@ -34,6 +34,9 @@ const val KEY_UPDATE_FAIL_REASON = "updateFailReason"
 /** 更新任务失败时的异常详情（诊断用，UI 原样展示） */
 const val KEY_UPDATE_ERROR_DETAIL = "updateErrorDetail"
 
+/** 当前下载速度（字节/秒） */
+const val KEY_UPDATE_SPEED = "updateSpeed"
+
 /** 后台更新任务的下载进度（WorkManager progress）：百分比整数（-1 表示未知）与已下载字节数 */
 const val KEY_UPDATE_PROGRESS = "updateProgress"
 const val KEY_UPDATE_DOWNLOADED = "updateDownloaded"

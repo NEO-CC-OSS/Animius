@@ -81,6 +81,8 @@
     <string name="update_cancelled">已取消更新</string>
     <string name="update_downloading_percent">正在下载更新… %1$d%%</string>
     <string name="update_downloading_unknown">正在下载更新… 已下载 %1$d MB</string>
+    <string name="update_connecting">正在连接更新服务器…</string>
+    <string name="update_speed">速度 %1$s</string>
     <string name="cancel_download">取消下载</string>
     <string name="software_updates">软件更新</string>
     <string name="checking_update">检测更新中</string>

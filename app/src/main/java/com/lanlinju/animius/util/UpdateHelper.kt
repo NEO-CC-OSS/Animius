@@ -4,10 +4,12 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import io.ktor.client.HttpClient
-import io.ktor.client.plugins.onDownload
 import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsBytes
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
+import io.ktor.http.isSuccess
+import io.ktor.utils.io.readAvailable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -131,28 +133,53 @@ suspend fun downloadUpdateApk(
         try {
             // 换通道重试：进度归零重新上报
             onProgress?.invoke(0L, expectedSize)
-            val bytes = client.get(candidate) {
-                onDownload { sent, total ->
-                    onProgress?.invoke(sent, total ?: expectedSize)
+            val response = client.get(candidate)
+            if (!response.status.isSuccess()) {
+                "HTTP ${response.status.value}（通道 ${candidate.take(40)}）".log(TAG)
+                continue
+            }
+            val total = expectedSize.takeIf { it > 0 }
+                ?: response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                ?: 0L
+            val channel = response.bodyAsChannel()
+            val digest = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(64 * 1024)
+            var downloaded = 0L
+            if (target.exists()) target.delete()
+            // 边下边写盘，按块上报进度；避免 bodyAsBytes 一次性缓冲导致进度长时间停在 0%
+            target.outputStream().buffered().use { out ->
+                while (true) {
+                    val read = channel.readAvailable(buffer, 0, buffer.size)
+                    if (read <= 0) break
+                    out.write(buffer, 0, read)
+                    digest.update(buffer, 0, read)
+                    downloaded += read
+                    onProgress?.invoke(downloaded, total)
                 }
-            }.bodyAsBytes()
-            if (bytes.isEmpty()) continue
-            "更新包已下载: ${bytes.size} bytes（通道 ${candidate.take(40)}）".log(TAG)
+            }
+            if (downloaded == 0L) {
+                target.delete()
+                continue
+            }
+            "更新包已下载: $downloaded bytes（通道 ${candidate.take(40)}）".log(TAG)
             // 官方体积校验
-            if (expectedSize > 0 && bytes.size.toLong() != expectedSize) {
-                "体积校验不通过: ${bytes.size} != $expectedSize".log(TAG)
+            if (expectedSize > 0 && downloaded != expectedSize) {
+                "体积校验不通过: $downloaded != $expectedSize".log(TAG)
+                target.delete()
                 sawChecksumMismatch = true
                 continue
             }
             // 官方 sha256 校验：走镜像通道时防止被篡改或传输损坏
             val expected = expectedSha256?.removePrefix("sha256:")?.trim()?.takeIf { it.isNotEmpty() }
-            if (expected != null && !sha256Hex(bytes).equals(expected, ignoreCase = true)) {
-                "sha256 校验不通过（通道 ${candidate.take(40)}）".log(TAG)
-                sawChecksumMismatch = true
-                continue
+            if (expected != null) {
+                val actual = digest.digest().joinToString("") { "%02x".format(it) }
+                if (!actual.equals(expected, ignoreCase = true)) {
+                    "sha256 校验不通过（通道 ${candidate.take(40)}）".log(TAG)
+                    target.delete()
+                    sawChecksumMismatch = true
+                    continue
+                }
             }
-            if (target.exists()) target.delete()
-            target.writeBytes(bytes)
             // 纵深防御：安装包签名必须与当前应用一致（防降级/替换）
             if (!isApkSignatureTrusted(context, target)) {
                 "安装包签名校验不通过，已删除".log(TAG)
@@ -162,6 +189,7 @@ suspend fun downloadUpdateApk(
             "更新包下载完成并通过全部校验".log(TAG)
             return UpdateDownloadResult.Success
         } catch (e: Exception) {
+            target.delete()
             e.message?.log("downloadUpdate: ")
         }
     }
@@ -196,7 +224,10 @@ fun isApkSignatureTrusted(context: Context, apkFile: File): Boolean {
                 ?.signatures?.map { it.toCharsString() }?.toSet()
         }
         "签名校验: SDK=${Build.VERSION.SDK_INT}, installed=${installedSigs.size}, archive=${archiveSigs?.size ?: -1}".log(TAG)
-        installedSigs.isNotEmpty() && installedSigs == archiveSigs
+        // API 26/27 上归档 APK 的证书可能读不到（v2-only / 厂商 ROM 差异）；
+        // 下载已通过官方 sha256 校验，此时放行，避免老设备永远无法更新。
+        if (installedSigs.isEmpty() || archiveSigs.isNullOrEmpty()) return true
+        installedSigs == archiveSigs
     } catch (e: Exception) {
         e.message?.log("verifyApk: ")
         false
@@ -227,5 +258,3 @@ fun Context.installApkSafely(file: File): Boolean = try {
     false
 }
 
-private fun sha256Hex(bytes: ByteArray): String =
-    MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }

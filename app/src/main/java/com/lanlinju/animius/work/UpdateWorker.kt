@@ -13,6 +13,7 @@ import com.lanlinju.animius.util.KEY_UPDATE_DOWNLOADED
 import com.lanlinju.animius.util.KEY_UPDATE_ERROR_DETAIL
 import com.lanlinju.animius.util.KEY_UPDATE_FAIL_REASON
 import com.lanlinju.animius.util.KEY_UPDATE_PROGRESS
+import com.lanlinju.animius.util.KEY_UPDATE_SPEED
 import com.lanlinju.animius.util.UpdateDownloadResult
 import com.lanlinju.animius.util.downloadUpdateApk
 import com.lanlinju.animius.util.installApkSafely
@@ -42,6 +43,8 @@ class UpdateWorker(appContext: Context, workerParams: WorkerParameters) :
             try {
                 var lastPercent = -2
                 var lastBytes = 0L
+                var lastSpeedTime = System.currentTimeMillis()
+                var lastSpeedBytes = 0L
                 val result = downloadUpdateApk(
                     client = DefaultHttpClient,
                     url = url,
@@ -50,6 +53,7 @@ class UpdateWorker(appContext: Context, workerParams: WorkerParameters) :
                     expectedSize = size,
                     context = applicationContext,
                 ) { downloaded, total ->
+                    val now = System.currentTimeMillis()
                     // 节流：有总长度时按百分比变化上报；总长度未知时按每 512KB 上报，避免只报一次后不再更新
                     val percent = if (total > 0) (downloaded * 100 / total).toInt() else -1
                     val shouldReport = if (percent >= 0) {
@@ -58,12 +62,17 @@ class UpdateWorker(appContext: Context, workerParams: WorkerParameters) :
                         downloaded - lastBytes >= 512 * 1024
                     }
                     if (shouldReport) {
+                        val elapsed = (now - lastSpeedTime).coerceAtLeast(1L)
+                        val speed = ((downloaded - lastSpeedBytes) * 1000 / elapsed).coerceAtLeast(0L)
                         lastPercent = percent
                         lastBytes = downloaded
+                        lastSpeedTime = now
+                        lastSpeedBytes = downloaded
                         setProgressAsync(
                             workDataOf(
                                 KEY_UPDATE_PROGRESS to percent,
                                 KEY_UPDATE_DOWNLOADED to downloaded,
+                                KEY_UPDATE_SPEED to speed,
                             )
                         )
                     }

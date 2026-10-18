@@ -117,6 +117,7 @@ import com.lanlinju.animius.util.isWideScreen
 import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.rememberPreference
 import java.time.LocalDate
+import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -702,21 +703,37 @@ private fun UpdateDescriptionContent(versionName: String, description: String) {
 @Composable
 private fun UpdateDownloadProgress(state: UpdateState.Downloading) {
     val percent = state.progress
+    val speed = state.speedBytesPerSec
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = if (percent != null) {
-                stringResource(R.string.update_downloading_percent, (percent * 100).toInt())
-            } else {
-                stringResource(R.string.update_downloading_unknown, state.downloadedBytes / 1024 / 1024)
+            text = when {
+                percent == null -> stringResource(
+                    R.string.update_downloading_unknown,
+                    state.downloadedBytes / 1024 / 1024,
+                )
+                state.downloadedBytes == 0L -> stringResource(R.string.update_connecting)
+                else -> stringResource(R.string.update_downloading_percent, (percent * 100).toInt())
             }
         )
+        if (speed != null && speed > 0) {
+            Text(
+                text = stringResource(R.string.update_speed, formatSpeed(speed)),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         Spacer(modifier = Modifier.height(dimensionResource(id = R.dimen.small_padding)))
-        if (percent != null) {
+        if (percent != null && state.downloadedBytes > 0) {
             LinearProgressIndicator(progress = { percent }, modifier = Modifier.fillMaxWidth())
         } else {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
     }
+}
+
+private fun formatSpeed(bytesPerSec: Long): String = when {
+    bytesPerSec >= 1024 * 1024 -> String.format(Locale.US, "%.1f MB/s", bytesPerSec / 1024.0 / 1024.0)
+    bytesPerSec >= 1024 -> String.format(Locale.US, "%.0f KB/s", bytesPerSec / 1024.0)
+    else -> "$bytesPerSec B/s"
 }
 
 /** 转圈 + 说明文字（准备中/校验中/调起安装） */

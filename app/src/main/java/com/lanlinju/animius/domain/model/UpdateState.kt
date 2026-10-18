@@ -19,7 +19,11 @@ sealed interface UpdateState {
      * @param progress 0f~1f；为 null 表示服务端未提供总长度（如部分镜像通道），此时只显示已下载字节数
      * @param downloadedBytes 已下载字节数
      */
-    data class Downloading(val progress: Float?, val downloadedBytes: Long) : UpdateState
+    data class Downloading(
+        val progress: Float?,
+        val downloadedBytes: Long,
+        val speedBytesPerSec: Long? = null,
+    ) : UpdateState
 
     /** 下载完成，正在校验安装包（哈希 + 签名） */
     object Verifying : UpdateState
