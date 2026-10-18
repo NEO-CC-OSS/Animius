@@ -10,7 +10,7 @@ Android TV 动漫播放器，基于 [Animius](https://github.com/lanlinju/Animiu
 
 [![Release](https://img.shields.io/github/v/release/NEO-CC-OSS/Animius?style=flat-square)](https://github.com/NEO-CC-OSS/Animius/releases/latest)
 [![License](https://img.shields.io/badge/License-GPL--3.0-orange?style=flat-square)](#致谢)
-[![Platform](https://img.shields.io/badge/Android-8.0%2B-green?style=flat-square)](#安装)
+[![Platform](https://img.shields.io/badge/Android-8.0%2B-green?style=flat-square)](#下载安装)
 [![CI](https://github.com/NEO-CC-OSS/Animius/actions/workflows/android_ci.yml/badge.svg?branch=source-danmaku)](https://github.com/NEO-CC-OSS/Animius/actions/workflows/android_ci.yml)
 
 <table>
@@ -30,21 +30,33 @@ Android TV 动漫播放器，基于 [Animius](https://github.com/lanlinju/Animiu
 
 - 遥控器焦点：方向键移动、焦点描边、焦点记忆
 - 播放器直控：双击返回、快进快退气泡提示
-- 弹幕：弹弹play 开放弹幕网络，集数匹配，失败原因提示
+- 弹幕：弹弹play 开放弹幕网络，集数智能匹配；加载失败时提示原因（网络错误 / 未匹配 / 鉴权问题）
 - 多数据源：内置多个数据源，可随时切换
-- 每周时间表、收藏、历史、断点续播
-- 离线下载（进度与入口仍在完善）
+- 每周时间表：按周整理新番更新
+- 收藏、历史、断点续播
+- 离线下载：支持缓存到本机（进度与入口仍在完善）
 - 应用内检查更新
 
-## 安装
+## 下载安装
 
-1. 从 [Releases](https://github.com/NEO-CC-OSS/Animius/releases/latest) 下载 APK
+1. 从 [Releases](https://github.com/NEO-CC-OSS/Animius/releases/latest) 下载最新 APK
+   （单包包含 arm64-v8a / armeabi-v7a / x86 / x86_64）
 2. 用 U 盘、局域网或电视浏览器传到设备
 3. 按提示允许安装未知来源应用
 
-要求 Android 8.0 及以上，不需要 Google 服务框架或 Leanback 认证。APK 包含 arm64-v8a、armeabi-v7a、x86、x86_64，无需挑架构。
+系统要求：Android 8.0 及以上；不需要 Google 服务框架或 Leanback 认证。
 
-直接覆盖安装可保留数据；提示签名冲突时，先卸载旧版本。
+覆盖升级：直接安装可保留数据；提示签名冲突时，先卸载旧版本。
+
+## 兼容性
+
+| 设备 / 环境 | 支持情况 |
+|---|---|
+| Android TV / Google TV | 支持遥控器操作 |
+| 普通 Android 电视、盒子、投影仪（8.0+） | 可安装，不要求 Leanback 认证 |
+| 手机 / 平板 | 可用，交互以 TV 为准 |
+| Android 7.x 及以下 | 暂不支持 |
+| Google 服务框架（GMS） | 不需要 |
 
 ## 常见问题
 
