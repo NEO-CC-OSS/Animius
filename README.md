@@ -4,15 +4,13 @@
 
 # Animius TV版
 
-**轻量、无广告、遥控器优先的 Android TV 动漫播放器**
+Android TV 动漫播放器，基于 [Animius](https://github.com/lanlinju/Animius) 的 TV 定制分支。
 
-约 4.6 MB · Android 8.0+ · 不要求 Google TV 认证 · 支持弹幕
+遥控器操作 · 弹幕 · 多数据源 · 约 4.6 MB
 
 [![Release](https://img.shields.io/github/v/release/NEO-CC-OSS/Animius?style=flat-square)](https://github.com/NEO-CC-OSS/Animius/releases/latest)
-[![APK](https://img.shields.io/badge/APK-4.6%20MB-blue?style=flat-square)](https://github.com/NEO-CC-OSS/Animius/releases/latest)
-[![License](https://img.shields.io/badge/License-GPL--3.0-orange?style=flat-square)](#-致谢与声明)
-[![Platform](https://img.shields.io/badge/Platform-Android%208.0%2B-green?style=flat-square)](#-兼容性)
-[![No Ads](https://img.shields.io/badge/Ads-none-brightgreen?style=flat-square)](#-项目定位)
+[![License](https://img.shields.io/badge/License-GPL--3.0-orange?style=flat-square)](#致谢)
+[![Platform](https://img.shields.io/badge/Android-8.0%2B-green?style=flat-square)](#安装)
 [![CI](https://github.com/NEO-CC-OSS/Animius/actions/workflows/android_ci.yml/badge.svg?branch=source-danmaku)](https://github.com/NEO-CC-OSS/Animius/actions/workflows/android_ci.yml)
 
 <table>
@@ -28,91 +26,60 @@
 
 </div>
 
-## 🎯 项目定位
+## 功能
 
-这个分支不做“大而全”，只围绕五条原则做取舍：
+- 遥控器焦点：方向键移动、焦点描边、焦点记忆
+- 播放器直控：双击返回、快进快退气泡提示
+- 弹幕：弹弹play 开放弹幕网络，集数匹配，失败原因提示
+- 多数据源：内置多个数据源，可随时切换
+- 每周时间表、收藏、历史、断点续播
+- 离线下载（进度与入口仍在完善）
+- 应用内检查更新
 
-| 原则 | 具体做法 |
-|---|---|
-| **轻量** | 安装包约 4.6 MB；无广告 SDK、无后台常驻服务、不依赖 Google 服务框架。 |
-| **兼容** | Android 8.0 起可安装；不要求 Google TV（Leanback）认证，普通 Android 电视、盒子、投影仪都能用。 |
-| **TV 大屏** | 布局、字号、焦点按远距离观看设计，不把手机界面直接放大。 |
-| **遥控器优先** | 方向键焦点、焦点描边、焦点记忆、长按操作、播放器直控；不设计必须触摸才能用的功能。 |
-| **弹幕** | 接入[弹弹play 开放弹幕网络](https://www.dandanplay.com)，集数智能匹配；加载失败时说明原因，而不是静默消失。 |
+## 安装
 
-一句话：**让老电视和盒子，用遥控器也能顺畅地看番、看弹幕。**
+1. 从 [Releases](https://github.com/NEO-CC-OSS/Animius/releases/latest) 下载 APK
+2. 用 U 盘、局域网或电视浏览器传到设备
+3. 按提示允许安装未知来源应用
 
-> 新增功能前先过五问：包体是否明显变大？是否抬高系统门槛？是否要求 Google 服务？是否破坏遥控器焦点？是否影响弹幕匹配？任一答案不理想，就不做。
+要求 Android 8.0 及以上，不需要 Google 服务框架或 Leanback 认证。APK 包含 arm64-v8a、armeabi-v7a、x86、x86_64，无需挑架构。
 
-## ✨ 功能特性
+直接覆盖安装可保留数据；提示签名冲突时，先卸载旧版本。
 
-- 📺 **遥控器焦点体系**：方向键移动、主题色焦点描边，离开再回来仍在原处
-- 🎮 **播放器直控**：播放中双击返回、快进快退带中央气泡提示，不唤起控制栏也能顺手操作
-- 💬 **弹幕**：弹弹play 开放弹幕网络，集数智能匹配；失败原因分类提示（网络错误 / 未匹配 / 鉴权问题）
-- 🗂 **多数据源**：内置多个动漫数据源，一键切换，某个源波动时快速换源
-- 🗓 **每周时间表**：按周整理新番更新，追番节奏一目了然
-- ⭐ **收藏与历史**：追番收藏、断点续播
-- ⬇️ **离线下载**：支持缓存到本机（下载进度与入口仍在完善）
-- 🔄 **应用内更新**：检查更新、下载进度、失败原因与重试
-- 🎨 **动态主题**：界面取色自当前番剧封面，随番换色
+## 常见问题
 
-## 📥 下载安装
+**弹幕不显示**
 
-1. 打开 [Releases Latest](https://github.com/NEO-CC-OSS/Animius/releases/latest) 下载最新 `.apk`
-   （单包包含 arm64-v8a / armeabi-v7a / x86 / x86_64，无需挑架构）
-2. 用 U 盘、局域网或电视浏览器把 APK 传到设备
-3. 按系统提示允许「安装未知来源应用」
+弹幕来自弹弹play，需要联网。冷门剧集可能未收录，会提示未匹配；网络或鉴权问题会单独提示。
 
-- **系统要求**：Android 8.0（API 26）及以上；不需要 Google 服务框架
-- **覆盖升级**：直接安装新版本即可保留数据；若提示签名冲突，说明设备上装过其他来源的旧版本，需先卸载再安装
+**播放失败**
 
-## 📱 兼容性
+换个数据源或稍后重试。
 
-| 设备 / 环境 | 支持情况 |
-|---|---|
-| Android TV / Google TV | ✅ 支持遥控器操作 |
-| 普通 Android 电视、盒子、投影仪（8.0+） | ✅ 不要求 Leanback 认证 |
-| 手机 / 平板 | ✅ 可用，交互以 TV 为准 |
-| Android 7.x 及以下 | ⏳ 当前未支持（基线 8.0，向下兼容是长期方向） |
-| Google 服务框架（GMS） | 不需要 |
+**遥控器没反应**
 
-## ❓ 常见问题
+看屏幕上的焦点框；部分电视的鼠标模式会干扰焦点操作。
 
-**为什么安装包这么小？**
-没有广告 SDK、没有多平台运行时、没有后台常驻服务。功能按 TV 场景取舍，优先保证老设备上的安装和启动开销。
+**桌面找不到图标**
 
-**为什么不需要 Google TV 认证？**
-应用没有把 Leanback 作为必需特性，普通 Android 电视和盒子可以直接安装。部分 Android TV 桌面只展示经过 Leanback 认证的应用；如果桌面找不到图标，可从系统「应用」列表启动，Leanback 桌面入口正在补。
+部分 Android TV 桌面只显示 Leanback 应用，可从系统应用列表启动。
 
-**弹幕不显示？**
-弹幕来自弹弹play 开放平台，需要设备能正常联网。部分冷门剧集可能未被弹幕库收录，此时会提示「未匹配」；网络或鉴权异常也会分别提示原因。
+**手机能用吗**
 
-**播放加载失败？**
-数据来自公共网络，个别线路会有波动。可切换数据源或稍后重试，播放器已内置网络异常自动重试。
+可以，交互以电视遥控器为准。
 
-**遥控器按了没反应？**
-留意屏幕上的焦点框位置；个别系统的「鼠标模式」会干扰焦点操作，可尝试关闭。
+## 构建
 
-**手机能用吗？**
-可以安装使用，但本项目主要面向 TV 大屏优化，交互体验以电视遥控器为准。
+JDK 17 + Android SDK。
 
-## 🗺 近期方向
+```bash
+./gradlew :app:assembleDebug
+```
 
-- Android TV Leanback 桌面入口与 banner
-- 下载功能反馈：进度、失败提示、更明显的入口
-- 播放/源错误分类：网络、证书、站点改版分别提示
-- 评估 minSdk 下探，覆盖更老的电视与盒子
-- 可选弹幕净化（去重 / 屏蔽广告），默认关闭
+弹幕功能需要在 `local.properties` 配置 `dandanplayAppId` 和 `dandanplayAppSecret`，该文件不会入库。
 
-## 🔧 自行构建
+## 致谢
 
-- 环境：JDK 17 + Android SDK（用 Android Studio 打开工程最省事）
-- 构建：`./gradlew :app:assembleDebug`（正式版用 `assembleRelease`）
-- 弹幕功能：需在 [弹弹play 开放平台](https://www.dandanplay.com)申请开发者凭证，并在工程根目录的 `local.properties` 中配置 `dandanplayAppId` / `dandanplayAppSecret`（该文件不会入库）
-- 本项目仅供学习交流，弹幕功能免费，无任何商业用途
+上游 [lanlinju/Animius](https://github.com/lanlinju/Animius)（GPL-3.0），经原作者同意维护的 TV 分支。弹幕数据来自 [弹弹play](https://www.dandanplay.com)。
 
-## 🙏 致谢与声明
-
-- 上游项目：[lanlinju/Animius](https://github.com/lanlinju/Animius)（GPL-3.0）。本仓库是经原作者同意独立维护的 TV 定制分支，并沿用「Animius TV版」名称，感谢原作者 [Lanlinju](https://github.com/lanlinju) 的开源工作。上游的应用架构说明与参考来源详见[上游仓库 README](https://github.com/lanlinju/Animius#readme)。
-- 弹幕数据：[弹弹play 开放弹幕网络](https://www.dandanplay.com)
-- 本项目不存储、不分发任何影视内容，所有数据均来自公共网络；仅供学习交流，请于下载后 24 小时内删除，如认可相关作品请支持正版。
+本项目不存储、不分发影视内容，仅供学习交流。
