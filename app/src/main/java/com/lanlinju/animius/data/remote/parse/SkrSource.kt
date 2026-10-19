@@ -19,6 +19,15 @@ import java.security.MessageDigest
 import java.util.Base64
 
 /**
+ * 人机验证签名：每个字符 charCode 的十进制拼接后取 md5（站方 stringtoHex 的真实语义）。
+ * 独立成顶层函数，便于 JVM 单测（构造 SkrSource 会读取 Application 偏好）。
+ */
+internal fun skrVerificationSignature(value: String): String =
+    MessageDigest.getInstance("MD5")
+        .digest(value.map { it.code.toString() }.joinToString("").toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+
+/**
  * 樱之空动漫（skr.skr1.cc，非标端口 666）
  *
  * 2026-10-11 接入取证与全链路实测（tools/source_probe.py、源站评测报告-20261011.md）：
@@ -60,7 +69,7 @@ class SkrSource : AnimeSource {
         val type = VERIFY_TYPE_REGEX.find(js)?.groupValues?.get(1) ?: return false
         val path = VERIFY_PATH_REGEX.find(js)?.groupValues?.get(1) ?: return false
         // 站方 JS 的 stringtoHex 实际是把每个字符的 charCode 十进制拼接（不是十六进制）
-        val sig = md5(value.map { it.code.toString() }.joinToString(""))
+        val sig = skrVerificationSignature(value)
         val verifyUrl = fullUrl(path.substringBefore("?")) + "?type=$type&key=$key&value=$sig"
         val resp = DownloadManager.getHtml(
             verifyUrl,
@@ -68,11 +77,6 @@ class SkrSource : AnimeSource {
         )
         return resp.isNotEmpty()
     }
-
-    private fun md5(input: String): String =
-        MessageDigest.getInstance("MD5")
-            .digest(input.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
 
     override suspend fun getHomeData(): List<HomeBean> {
         val document = fetchDocument(baseUrl)

@@ -34,6 +34,15 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # 单元测试门禁：纯逻辑/解析回归，不依赖网络与真机
+      - name: Run unit tests
+        run: |
+          chmod +x ./gradlew
+          ./gradlew testDebugUnitTest
+        env:
+          DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
+          DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
+
       # Build the Debug APK
       - name: Build APK
         run: |

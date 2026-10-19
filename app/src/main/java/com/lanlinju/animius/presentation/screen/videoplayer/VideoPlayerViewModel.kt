@@ -20,6 +20,7 @@ import com.lanlinju.animius.util.KEY_DANMAKU_ENABLED
 import com.lanlinju.animius.util.Resource
 import com.lanlinju.animius.util.Result
 import com.lanlinju.animius.util.SourceMode
+import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.onError
 import com.lanlinju.animius.util.onSuccess
 import com.lanlinju.animius.util.preferences
@@ -109,6 +110,7 @@ class VideoPlayerViewModel @Inject constructor(
                                 headers = it.headers
                             ).let {
                                 _videoState.value = Resource.Success(it)
+                                "VIDEO success title=${it.title} ep=${it.episodeName}".log("BehaviorTrace")
 
                                 // 获取弹幕会话
                                 fetchDanmakuSession()
@@ -116,6 +118,7 @@ class VideoPlayerViewModel @Inject constructor(
                         }
                         .onError {
                             _videoState.value = Resource.Error(it)
+                            "VIDEO error ${it.message}".log("BehaviorTrace")
                         }
 
                 }
@@ -154,6 +157,7 @@ class VideoPlayerViewModel @Inject constructor(
                     episodes = episodes
                 )
             )
+            "VIDEO local title=$title ep=${episodes[index].name}".log("BehaviorTrace")
 
             fetchDanmakuSession()
         }
@@ -200,11 +204,13 @@ class VideoPlayerViewModel @Inject constructor(
                             )
                         } ?: return@onSuccess
                     )
+                    "VIDEO remote ep=$episodeUrl".log("BehaviorTrace")
 
                     fetchDanmakuSession() // 视频加载成功后获取弹幕
                 }
                 .onError {
                     _videoState.value = Resource.Error(it)
+                    "VIDEO error ${it.message}".log("BehaviorTrace")
                 }
         }
     }
@@ -220,7 +226,10 @@ class VideoPlayerViewModel @Inject constructor(
         _danmakuStatus.value = null
 
         // 如果未启用了弹幕，直接返回
-        if (!_danmakuEnabled.value) return
+        if (!_danmakuEnabled.value) {
+            "DANMAKU disabled".log("BehaviorTrace")
+            return
+        }
 
         viewModelScope.launch {
             _videoState.value.data?.let { video ->
@@ -231,6 +240,7 @@ class VideoPlayerViewModel @Inject constructor(
                     _danmakuSession.value = result.session
                 }
                 _danmakuStatus.value = result
+                "DANMAKU title=${video.title} ep=${video.episodeName} result=${result::class.simpleName}".log("BehaviorTrace")
             }
         }
     }

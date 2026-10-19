@@ -19,6 +19,16 @@ import java.security.MessageDigest
 
 
 /**
+ * 详情页标题清洗：站方把「评分 + 评分人数」放在 h1 内，直接取 text 会粘成「标题10.0×6」。
+ * 先删评分块再取完整标题；不用 split(" ") 截断（会误伤带空格的季数/副标题）。
+ */
+internal fun parseDetailTitle(document: Document): String {
+    val titleEl = document.selectFirst("h1.entry-title") ?: return ""
+    titleEl.select("div.score-wrap, span.score-wrap").remove()
+    return titleEl.text()
+}
+
+/**
  * 嘶哩嘶哩域名发布地址：https://silisili-link.github.io/
  */
 object SilisiliSource : AnimeSource {
@@ -107,9 +117,7 @@ object SilisiliSource : AnimeSource {
 
         // h1 内混有评分块（div.score-wrap，如 "10.0 ×6次评分"）；显式删掉再取完整标题，
         // 不再用 split(" ") 截断（会误伤带空格的季数/副标题）
-        val titleEl = document.selectFirst("h1.entry-title")
-        titleEl?.select("div.score-wrap, span.score-wrap")?.remove()
-        val title = titleEl?.text().orEmpty()
+        val title = parseDetailTitle(document)
         val img = document.select("div.v_sd_l > img").attr("src")
         val tags = document.select("p.data").select("a")
 

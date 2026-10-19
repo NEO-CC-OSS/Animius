@@ -84,6 +84,11 @@ android {
         compose = true
         buildConfig = true
     }
+    // JVM 单测里 android.util.Log 等框架方法默认抛 "not mocked"；
+    // 返回默认值即可，测试只关心纯逻辑，不依赖 Android 运行时。
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"

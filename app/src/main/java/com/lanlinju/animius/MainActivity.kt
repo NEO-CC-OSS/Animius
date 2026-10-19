@@ -23,6 +23,7 @@ import com.lanlinju.animius.presentation.navigation.Screen
 import com.lanlinju.animius.presentation.screen.crash.CrashActivity
 import com.lanlinju.animius.presentation.theme.AnimeTheme
 import com.lanlinju.animius.util.getCrashLogInfo
+import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.logCrashToFile
 import dagger.hilt.android.AndroidEntryPoint
 import kotlin.system.exitProcess
@@ -81,6 +82,7 @@ private fun App(modifier: Modifier = Modifier) {
         val now = SystemClock.uptimeMillis()
         if (now - lastNavigateTimeMs.longValue >= 500) {
             lastNavigateTimeMs.longValue = now
+            "NAV $route".log("BehaviorTrace")
             navController.navigate(route)
         }
     }

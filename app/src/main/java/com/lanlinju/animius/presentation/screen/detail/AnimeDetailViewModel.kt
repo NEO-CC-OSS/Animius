@@ -18,6 +18,7 @@ import com.lanlinju.animius.presentation.navigation.Screen
 import com.lanlinju.animius.util.KEY_USE_DOWNLOAD_DIRECTORY
 import com.lanlinju.animius.util.Resource
 import com.lanlinju.animius.util.SourceMode
+import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.onSuccess
 import com.lanlinju.animius.util.preferences
 import com.lanlinju.download.download
@@ -67,6 +68,7 @@ class AnimeDetailViewModel @Inject constructor(
             _isFavourite.value = roomRepository.checkFavourite(detailUrl).first()
             getAnimeDetailUseCase(detailUrl, mode).collect {
                 _animeDetailState.value = it
+                "DETAIL mode=$mode url=$detailUrl state=${it::class.simpleName}".log("BehaviorTrace")
             }
         }
     }
