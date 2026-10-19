@@ -68,6 +68,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -557,7 +558,13 @@ fun HomeRow(
                         onItemClicked(homeItem!!)
                     },
                     modifier = Modifier
+                        .testTag("home-item-$rowIndex-$index")
                         .focusRequester(itemRequester)
+                        // 行首/行尾在卡片本身上取消左右焦点搜索；只挂在 LazyRow 上对子项无效
+                        .focusProperties {
+                            if (index == 0) left = FocusRequester.Cancel
+                            if (index == list.lastIndex) right = FocusRequester.Cancel
+                        }
                         .onFocusChanged {
                             if (it.isFocused) {
                                 lastFocusedRow.value = rowIndex
