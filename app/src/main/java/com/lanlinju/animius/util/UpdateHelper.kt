@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.timeout
+import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
@@ -97,13 +99,31 @@ private fun githubUrlCandidates(url: String): List<String> = buildList {
 }
 
 /**
+ * 直连 GitHub 的等待上限：国内网络下直连经常空等到全局 30 秒才失败，
+ * 这里 6 秒连不上、10 秒收不到数据就切镜像；镜像通道仍用全局默认超时。
+ */
+private const val DIRECT_CONNECT_TIMEOUT_MS = 6_000L
+private const val DIRECT_SOCKET_TIMEOUT_MS = 10_000L
+
+private fun HttpRequestBuilder.applyDirectTimeout(isDirect: Boolean) {
+    if (isDirect) {
+        timeout {
+            connectTimeoutMillis = DIRECT_CONNECT_TIMEOUT_MS
+            socketTimeoutMillis = DIRECT_SOCKET_TIMEOUT_MS
+        }
+    }
+}
+
+/**
  * 检查更新：GitHub 直连失败时自动走镜像代理。
  * @return null 表示所有通道都失败
  */
 suspend fun fetchLatestRelease(client: HttpClient): GitHubRelease? {
-    for (candidate in githubUrlCandidates(CHECK_UPDATE_ADDRESS)) {
+    for ((index, candidate) in githubUrlCandidates(CHECK_UPDATE_ADDRESS).withIndex()) {
         try {
-            val text = client.get(candidate).bodyAsText()
+            val text = client.get(candidate) {
+                applyDirectTimeout(index == 0)
+            }.bodyAsText()
             return updateJson.decodeFromString<GitHubRelease>(text)
         } catch (e: Exception) {
             e.message?.log("checkUpdate: ")
@@ -129,11 +149,13 @@ suspend fun downloadUpdateApk(
     onProgress: ((downloaded: Long, total: Long) -> Unit)? = null,
 ): UpdateDownloadResult {
     var sawChecksumMismatch = false
-    for (candidate in githubUrlCandidates(url)) {
+    for ((index, candidate) in githubUrlCandidates(url).withIndex()) {
         try {
             // 换通道重试：进度归零重新上报
             onProgress?.invoke(0L, expectedSize)
-            val response = client.get(candidate)
+            val response = client.get(candidate) {
+                applyDirectTimeout(index == 0)
+            }
             if (!response.status.isSuccess()) {
                 "HTTP ${response.status.value}（通道 ${candidate.take(40)}）".log(TAG)
                 continue
