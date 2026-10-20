@@ -127,6 +127,33 @@ class WeekViewModel @Inject constructor(
         loadWeekData(forceRefresh = true)
     }
 
+    /**
+     * 切换数据源/修改域名时调用。
+     *
+     * 周表当前是元数据时，切源不影响周表内容，不能为了切源强制重新下载 9 MB 日历；
+     * 只有当前处于源站回退/不可用状态时，才重新取一次源站周表（不碰元数据网络）。
+     */
+    fun onSourceChanged() {
+        val origin = _metadataInfo.value.origin
+        if (origin == WeekDataOrigin.Metadata || origin == WeekDataOrigin.MetadataCache) {
+            "META ui source changed keep origin=$origin".log("BehaviorTrace")
+            return
+        }
+        viewModelScope.launch {
+            _weekDataMap.value = Resource.Loading
+            val sourceData = repository.getWeekData()
+            _weekDataMap.value = sourceData
+            _metadataInfo.value = _metadataInfo.value.copy(
+                origin = if (sourceData is Resource.Error) {
+                    WeekDataOrigin.Unavailable
+                } else {
+                    WeekDataOrigin.SourceSite
+                }
+            )
+            "META ui source changed origin=${_metadataInfo.value.origin}".log("BehaviorTrace")
+        }
+    }
+
     fun checkVersionUpdate(context: Context) {
 
         _isUpdateCheckInProgress.value = true

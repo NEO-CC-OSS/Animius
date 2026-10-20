@@ -280,6 +280,7 @@ fun WeekScreen(
             onDismissUpdateDialog = { viewModel.dismissVersionUpdateDialog() },
             onDismissLoadingIndicationDialog = { viewModel.dismissLoadingIndicationDialog() },
             onRefresh = { viewModel.refresh() },
+            onSourceChanged = { viewModel.onSourceChanged() },
             onDownloadUpdate = { lifecycleOwner ->
                 viewModel.downloadVersionUpdate(context, lifecycleOwner)
             },
@@ -634,11 +635,12 @@ fun Dialogs(
     onDownloadUpdate: (LifecycleOwner) -> Unit,
     onCancelDownload: () -> Unit,
     onRefresh: () -> Unit,
+    onSourceChanged: () -> Unit,
 ) {
     if (showSourceSwitchDialog) {
         SourceSwitchDialog(
             onDismissRequest = onDismissSourceSwitchDialog,
-            onRefresh = onRefresh
+            onRefresh = onSourceChanged
         )
     }
     if (showSettingsDialog) {
@@ -648,7 +650,7 @@ fun Dialogs(
         DomainChangeDialog { isRefresh ->
             onDismissDomainChangeDialog()
             if (isRefresh) {
-                onRefresh()
+                onSourceChanged()
             }
         }
     }
