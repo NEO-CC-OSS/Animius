@@ -328,8 +328,8 @@ jobs:
              --slurpfile featured featured.json '
             . as $root
             | ([ $root.days[].items[],
-                 (($root.related_subjects // {}) | .[]),
-                 ($root.featured // [])[] ]
+                 (($related_subjects[0] // {}) | .[]),
+                 ($featured[0] // [])[] ]
                | map({key: (.id | tostring), value: true})
                | from_entries) as $known
             | .days |= map(.items |= map(
@@ -498,14 +498,16 @@ jobs:
                       related.pop(key, None)
                   continue
               if refs:
-                  victim = min(refs, key=lambda key: (refs[key], -int(key)))
-                  related.pop(victim, None)
-                  for day in data.get("days", []):
-                      for item in day.get("items", []):
-                          item["related"] = [
-                              rid for rid in item.get("related", []) if str(rid) != victim
-                          ]
-                  continue
+                  victims = [key for key in refs if key in related]
+                  if victims:
+                      victim = min(victims, key=lambda key: (refs[key], -int(key)))
+                      related.pop(victim, None)
+                      for day in data.get("days", []):
+                          for item in day.get("items", []):
+                              item["related"] = [
+                                  rid for rid in item.get("related", []) if str(rid) != victim
+                              ]
+                      continue
               if data.get("featured"):
                   data["featured"].pop()
                   continue
