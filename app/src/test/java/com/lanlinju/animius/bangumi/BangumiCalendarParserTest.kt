@@ -22,11 +22,14 @@ class BangumiCalendarParserTest {
         summary: String = "",
         tags: List<String> = emptyList(),
         totalEpisodes: Int = 0,
+        aliases: List<String> = emptyList(),
     ): String {
         val tagsJson = tags.joinToString(",") { "\"$it\"" }
+        val aliasesJson = aliases.joinToString(",") { "\"$it\"" }
         return """{"id":$id,"name":"$name","name_cn":"$nameCn","image":"$image",""" +
             """"air_date":"$airDate","air_weekday":1,"rank":0,""" +
-            """"summary":"$summary","tags":[$tagsJson],"total_episodes":$totalEpisodes}"""
+            """"summary":"$summary","tags":[$tagsJson],"total_episodes":$totalEpisodes,""" +
+            """"aliases":[$aliasesJson]}"""
     }
 
     private fun days(items: Map<Int, List<String>> = emptyMap()): String =
@@ -131,6 +134,28 @@ class BangumiCalendarParserTest {
     }
 
     @Test
+    fun `keeps aliases for source matching`() {
+        val raw = calendarJson(
+            days = days(
+                mapOf(
+                    1 to listOf(
+                        item(
+                            id = 975,
+                            name = "ONE PIECE",
+                            nameCn = "航海王",
+                            aliases = listOf("海贼王", "ONE PIECE", " 海贼王 "),
+                        )
+                    )
+                )
+            )
+        )
+
+        val meta = BangumiCalendarParser.parse(raw, now).items.getValue(975)
+
+        assertEquals(listOf("海贼王", "ONE PIECE"), meta.aliases)
+    }
+
+    @Test
     fun `old json without detail fields still parses`() {
         val raw = calendarJson(
             days = days(mapOf(1 to listOf("""{"id":9,"name":"OnlyName"}""")))
@@ -143,6 +168,7 @@ class BangumiCalendarParserTest {
         assertEquals("", meta.summary)
         assertEquals(emptyList<String>(), meta.tags)
         assertEquals(0, meta.totalEpisodes)
+        assertEquals(emptyList<String>(), meta.aliases)
     }
 
     @Test

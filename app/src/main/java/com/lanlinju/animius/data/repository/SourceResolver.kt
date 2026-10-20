@@ -3,6 +3,7 @@ package com.lanlinju.animius.data.repository
 import com.lanlinju.animius.data.remote.api.AnimeApi
 import com.lanlinju.animius.data.remote.dto.AnimeDetailBean
 import com.lanlinju.animius.domain.matching.EpisodeNumber
+import com.lanlinju.animius.domain.matching.TitleAliases
 import com.lanlinju.animius.domain.matching.TitleMatcher
 import com.lanlinju.animius.domain.model.AnimeDetail
 import com.lanlinju.animius.domain.model.Episode
@@ -72,6 +73,18 @@ class SourceResolver @Inject constructor(
         /** 一次解析（最多 6 个源）的总预算 */
         const val OVERALL_TIMEOUT_MS = 45_000L
 
+        /**
+         * 换源时单个源的预算：搜索 + 详情 + 视频解析。
+         * 实测嘶哩嘶哩解析一集约 13s（搜索 2.8 + 详情 5 + 视频 5），12s 会误判超时。
+         */
+        const val EPISODE_PER_SOURCE_TIMEOUT_MS = 20_000L
+
+        /** 换源的整体预算：给两个慢源留出余量 */
+        const val EPISODE_OVERALL_TIMEOUT_MS = 60_000L
+
+        /** 每个源最多尝试的搜索关键词数（主标题 + 原名 + 别名） */
+        private const val MAX_QUERIES = 4
+
         /** 固定兜底顺序：稳定源在前，已知长期故障的源放最后 */
         private val FALLBACK_ORDER = listOf(
             SourceMode.Skr,
@@ -86,6 +99,28 @@ class SourceResolver @Inject constructor(
     fun cacheKey(metadataId: Long, title: String): String =
         if (metadataId > 0) "id:$metadataId" else "title:${TitleMatcher.normalize(title)}"
 
+    /**
+     * 播放取址失败时清掉该番的解析缓存：详情能打开不代表能播（例如 Age动漫
+     * 部分条目提示「网页端不提供播放」），不清掉会 7 天内一直命中坏源。
+     */
+    fun invalidate(metadataId: Long, title: String) {
+        matchStore.remove(cacheKey(metadataId, title))
+    }
+
+    /** 换源/播放成功后记住可用源，下次进入直接命中 */
+    fun remember(
+        metadataId: Long,
+        title: String,
+        mode: SourceMode,
+        detailUrl: String,
+        siteTitle: String,
+    ) {
+        matchStore.put(
+            cacheKey(metadataId, title),
+            SourceMatch(mode, detailUrl, siteTitle, Instant.now()),
+        )
+    }
+
     fun candidates(currentMode: SourceMode, exclude: Set<SourceMode> = emptySet()): List<SourceMode> =
         (listOf(currentMode) + FALLBACK_ORDER).distinct().filterNot { it in exclude }
 
@@ -94,12 +129,14 @@ class SourceResolver @Inject constructor(
      *
      * @param title 中文标题（元数据 `name_cn`，为空时用原名）
      * @param originalTitle 原名（中文搜索无结果时的兜底查询）
+     * @param aliases 同一部番的其他名字（内置别名表 + Bangumi 别名），用于搜索与候选校验
      * @param metadataId Bangumi id，用于缓存键
      * @param currentMode 用户当前选择的源，作为第一候选
      */
     suspend fun resolve(
         title: String,
         originalTitle: String = "",
+        aliases: List<String> = emptyList(),
         metadataId: Long = 0,
         currentMode: SourceMode,
         exclude: Set<SourceMode> = emptySet(),
@@ -107,7 +144,8 @@ class SourceResolver @Inject constructor(
         deadlineMillis: Long = System.currentTimeMillis() + OVERALL_TIMEOUT_MS,
         onProgress: (ResolveProgress) -> Unit = {},
     ): SourceResolveResult = withContext(Dispatchers.IO) {
-        val queries = searchTitles(title, originalTitle)
+        val allAliases = mergeAliases(title, aliases)
+        val queries = searchTitles(title, originalTitle, allAliases)
         if (queries.isEmpty()) {
             return@withContext SourceResolveResult.Failure(
                 listOf(SourceAttemptFailure(currentMode, "标题为空"))
@@ -149,7 +187,7 @@ class SourceResolver @Inject constructor(
 
             val source = try {
                 withTimeoutOrNull(minOf(PER_SOURCE_TIMEOUT_MS, remaining)) {
-                    findSource(mode, queries)
+                    findSource(mode, queries, allAliases)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -183,18 +221,21 @@ class SourceResolver @Inject constructor(
      * 取不到播放地址时，按集号在下一个源里找同一集。
      *
      * @param episodeNumber 已归一化的集号（[EpisodeNumber.canonical]）；`movie` 表示剧场版
+     * @param aliases 同一部番的其他名字（内置别名表 + Bangumi 别名）
      * @param exclude 已失败的源（通常包含当前源）
      */
     suspend fun resolveEpisode(
         title: String,
         originalTitle: String = "",
+        aliases: List<String> = emptyList(),
         episodeNumber: String,
         currentMode: SourceMode,
         exclude: Set<SourceMode> = setOf(currentMode),
-        deadlineMillis: Long = System.currentTimeMillis() + OVERALL_TIMEOUT_MS,
+        deadlineMillis: Long = System.currentTimeMillis() + EPISODE_OVERALL_TIMEOUT_MS,
         onProgress: (ResolveProgress) -> Unit = {},
     ): EpisodeResolveResult = withContext(Dispatchers.IO) {
-        val queries = searchTitles(title, originalTitle)
+        val allAliases = mergeAliases(title, aliases)
+        val queries = searchTitles(title, originalTitle, allAliases)
         if (queries.isEmpty()) {
             return@withContext EpisodeResolveResult.Failure(
                 listOf(SourceAttemptFailure(currentMode, "标题为空"))
@@ -215,8 +256,8 @@ class SourceResolver @Inject constructor(
             }
 
             val episode = try {
-                withTimeoutOrNull(minOf(PER_SOURCE_TIMEOUT_MS, remaining)) {
-                    findEpisode(mode, queries, target)
+                withTimeoutOrNull(minOf(EPISODE_PER_SOURCE_TIMEOUT_MS, remaining)) {
+                    findEpisode(mode, queries, target, allAliases)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -241,11 +282,15 @@ class SourceResolver @Inject constructor(
         EpisodeResolveResult.Failure(attempts)
     }
 
-    private suspend fun findSource(mode: SourceMode, queries: List<String>): ResolvedSource {
+    private suspend fun findSource(
+        mode: SourceMode,
+        queries: List<String>,
+        aliases: List<String>,
+    ): ResolvedSource {
         var lastReason = "没有匹配条目"
         for (query in queries) {
             val results = animeApi.getSearchData(query, 1, mode)
-            val matchIndex = TitleMatcher.pickBest(query, results.map { it.title })
+            val matchIndex = TitleMatcher.pickBest(query, results.map { it.title }, aliases)
             if (matchIndex == null) {
                 lastReason = "搜索无匹配"
                 continue
@@ -266,11 +311,12 @@ class SourceResolver @Inject constructor(
         mode: SourceMode,
         queries: List<String>,
         target: String,
+        aliases: List<String>,
     ): ResolvedEpisode {
         var lastReason = "没有匹配条目"
         for (query in queries) {
             val results = animeApi.getSearchData(query, 1, mode)
-            val matchIndex = TitleMatcher.pickBest(query, results.map { it.title })
+            val matchIndex = TitleMatcher.pickBest(query, results.map { it.title }, aliases)
             if (matchIndex == null) {
                 lastReason = "搜索无匹配"
                 continue
@@ -344,10 +390,27 @@ class SourceResolver @Inject constructor(
         )
     }
 
-    private fun searchTitles(title: String, originalTitle: String): List<String> =
-        listOf(title.trim(), originalTitle.trim())
+    /** 内置别名表 + 元数据别名，去重去空；内置表保证「航海王/海贼王」这类立刻可用 */
+    private fun mergeAliases(title: String, aliases: List<String>): List<String> =
+        (TitleAliases.forTitle(title) + aliases)
+            .map { it.trim() }
             .filter { it.isNotEmpty() }
             .distinct()
+
+    /**
+     * 搜索关键词：主标题、原名、别名；最多 4 条，避免一个源被大量别名搜索拖垮。
+     * 别名同时会传给 [TitleMatcher.pickBest] 做候选校验，所以多数情况第一条就能命中。
+     */
+    private fun searchTitles(
+        title: String,
+        originalTitle: String,
+        aliases: List<String>,
+    ): List<String> =
+        (listOf(title.trim(), originalTitle.trim()) + aliases)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .take(MAX_QUERIES)
 
     private class NoMatchingSourceException(message: String) : Exception(message)
 }

@@ -56,6 +56,8 @@ data class PlayerParameters(
     val isLocalVideo: Boolean = false,   /* 是否为本地视频 */
     val autoSource: Boolean = false,     /* 取不到播放地址时自动换源（仅元数据点播为 true） */
     val originalTitle: String = "",      /* 元数据原名：中文标题搜不到时的兜底查询 */
+    val aliases: List<String> = emptyList(), /* 元数据别名：换源搜索与候选校验 */
+    val metadataId: Long = 0,            /* 元数据 id：播放失败时清缓存、换源成功后写回 */
 ) {
     companion object {
         suspend fun serialize(
@@ -66,6 +68,8 @@ data class PlayerParameters(
             isLocalVideo: Boolean = false,
             autoSource: Boolean = false,
             originalTitle: String = "",
+            aliases: List<String> = emptyList(),
+            metadataId: Long = 0,
         ): String {
             return Json.encodeToString(
                 PlayerParameters(
@@ -76,6 +80,8 @@ data class PlayerParameters(
                     isLocalVideo,
                     autoSource,
                     originalTitle,
+                    aliases,
+                    metadataId,
                 )
             )
         }

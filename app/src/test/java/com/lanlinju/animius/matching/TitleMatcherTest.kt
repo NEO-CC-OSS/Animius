@@ -115,6 +115,26 @@ class TitleMatcherTest {
     }
 
     @Test
+    fun `pickBest accepts a candidate that matches an alias`() {
+        assertEquals(0, TitleMatcher.pickBest("航海王", listOf("海贼王"), listOf("海贼王")))
+    }
+
+    @Test
+    fun `pickBest prefers the exact title over an alias`() {
+        val candidates = listOf("海贼王", "航海王")
+        assertEquals(1, TitleMatcher.pickBest("航海王", candidates, listOf("海贼王")))
+    }
+
+    @Test
+    fun `pickBest ignores aliases of another season`() {
+        // 别名也要遵守季标规则：第二季的别名不能匹配第一季
+        assertEquals(
+            null,
+            TitleMatcher.pickBest("某番 第二季", listOf("某番"), listOf("某番")),
+        )
+    }
+
+    @Test
     fun `pickBest returns null when nothing is trustworthy`() {
         assertEquals(null, TitleMatcher.pickBest("葬送的芙莉莲", listOf("进击的巨人", "鬼灭之刃")))
     }

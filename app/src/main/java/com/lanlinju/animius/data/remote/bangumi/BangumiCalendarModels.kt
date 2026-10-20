@@ -21,6 +21,8 @@ data class MetadataItem(
     val summary: String,
     val tags: List<String>,
     val totalEpisodes: Int,
+    /** Bangumi 别名（如「海贼王」）；用于搜索与候选校验 */
+    val aliases: List<String> = emptyList(),
 )
 
 enum class CalendarFreshness {

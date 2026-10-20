@@ -121,21 +121,46 @@ object TitleMatcher {
 
     /**
      * 从候选标题里挑最可信的一条；没有可信候选返回 null。
-     * 优先级：归一化完全相等 > 长度差更小 > 原始顺序靠前。
+     * [aliases] 是同一部番的其他名字（内置别名表 + Bangumi 别名）：
+     * 候选只要与目标或任一别名可信匹配就算命中。
+     * 优先级：与目标完全相等 > 与别名完全相等 > 长度差更小 > 原始顺序靠前。
      */
-    fun pickBest(target: String, candidates: List<String>): Int? {
+    fun pickBest(
+        target: String,
+        candidates: List<String>,
+        aliases: List<String> = emptyList(),
+    ): Int? {
         val targetBase = normalize(target)
         if (targetBase.isEmpty()) return null
+        val aliasBases = aliases.map(::normalize).filter { it.isNotEmpty() }.toSet()
         return candidates.indices
-            .filter { isTrustworthy(target, candidates[it]) }
+            .filter { index ->
+                val candidate = candidates[index]
+                isTrustworthy(target, candidate) ||
+                    // 别名匹配也要服从目标的季数/剧场版上下文：
+                    // 否则「某番 第二季」会被别名「某番」带到第一季
+                    (contextCompatible(target, candidate) &&
+                        aliasBases.any { alias -> isTrustworthy(alias, candidate) })
+            }
             .minWithOrNull(
                 compareBy(
-                    { normalize(candidates[it]) != targetBase },
-                    { targetBase.length - normalize(candidates[it]).length },
+                    { index ->
+                        when (normalize(candidates[index])) {
+                            targetBase -> 0
+                            in aliasBases -> 1
+                            else -> 2
+                        }
+                    },
+                    { index -> targetBase.length - normalize(candidates[index]).length },
                     { it },
                 )
             )
     }
+
+    /** 候选是否与目标处于同一季/同一剧场版上下文 */
+    private fun contextCompatible(target: String, candidate: String): Boolean =
+        isMovie(target) == isMovie(candidate) &&
+            seasonCompatible(seasonOf(target), seasonOf(candidate))
 
     private fun seasonCompatible(targetSeason: Int?, candidateSeason: Int?): Boolean = when {
         targetSeason == null && candidateSeason == null -> true

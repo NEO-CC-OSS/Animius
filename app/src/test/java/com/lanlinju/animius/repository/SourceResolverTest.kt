@@ -323,6 +323,99 @@ class SourceResolverTest {
         assertEquals(1, result.source.detail.channelIndex)
     }
 
+    @Test
+    fun `candidate matching a built-in alias is accepted`() = runBlocking {
+        val api = FakeAnimeApi(
+            search = { _, query ->
+                // 主标题搜索就返回了别名标题：靠别名校验直接命中，不需要再搜一次
+                if (query == "航海王") {
+                    listOf(AnimeBean("海贼王", "", "https://x/1"))
+                } else {
+                    emptyList()
+                }
+            },
+            detail = { _, _ -> detailBean("海贼王", "第01集" to "ep1") },
+        )
+
+        val result = SourceResolver(api, FakeStore()).resolve(
+            title = "航海王",
+            currentMode = SourceMode.Skr,
+            now = now,
+            deadlineMillis = deadline,
+        )
+
+        assertTrue(result is SourceResolveResult.Success)
+        result as SourceResolveResult.Success
+        assertEquals("海贼王", result.source.siteTitle)
+        assertEquals(listOf("航海王"), api.searchCalls.map { it.second })
+    }
+
+    @Test
+    fun `alias query finds the show when the primary title does not`() = runBlocking {
+        val api = FakeAnimeApi(
+            search = { _, query ->
+                if (query == "海贼王") {
+                    listOf(AnimeBean("海贼王", "", "https://x/1"))
+                } else {
+                    emptyList()
+                }
+            },
+            detail = { _, _ -> detailBean("海贼王", "第01集" to "ep1") },
+        )
+
+        val result = SourceResolver(api, FakeStore()).resolve(
+            title = "航海王",
+            currentMode = SourceMode.Skr,
+            now = now,
+            deadlineMillis = deadline,
+        )
+
+        assertTrue(result is SourceResolveResult.Success)
+        result as SourceResolveResult.Success
+        assertEquals("海贼王", result.source.siteTitle)
+    }
+
+    @Test
+    fun `invalidate removes the cached match so the next resolve searches again`() = runBlocking {
+        val api = FakeAnimeApi(
+            search = { _, _ -> listOf(AnimeBean("测试番", "", "https://x/1")) },
+            detail = { _, _ -> detailBean("测试番", "1" to "ep1") },
+        )
+        val store = FakeStore()
+        val resolver = SourceResolver(api, store)
+
+        resolver.resolve(
+            title = "测试番",
+            metadataId = 42,
+            currentMode = SourceMode.Skr,
+            now = now,
+            deadlineMillis = deadline,
+        )
+        assertTrue(store.map.containsKey("id:42"))
+
+        resolver.invalidate(42, "测试番")
+
+        assertFalse(store.map.containsKey("id:42"))
+    }
+
+    @Test
+    fun `remember writes the playable source for next time`() {
+        val store = FakeStore()
+        val resolver = SourceResolver(FakeAnimeApi(), store)
+
+        resolver.remember(
+            metadataId = 42,
+            title = "测试番",
+            mode = SourceMode.Silisili,
+            detailUrl = "https://x/1",
+            siteTitle = "测试番",
+        )
+
+        val match = store.get("id:42", now)
+        assertEquals(SourceMode.Silisili, match?.mode)
+        assertEquals("https://x/1", match?.detailUrl)
+    }
+
     private fun detailBean(title: String, vararg episodes: Pair<String, String>) = AnimeDetailBean(
         title = title,
         imgUrl = "",

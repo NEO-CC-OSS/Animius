@@ -780,6 +780,8 @@ private fun handleEpisodeSelection(
                 // 元数据点播：取不到播放地址时自动换源；源站入口保持原行为
                 autoSource = viewModel.isMetadataDetail,
                 originalTitle = viewModel.originalTitle,
+                aliases = viewModel.aliases,
+                metadataId = viewModel.metadataId,
             ).let(onNavigateToVideoPlay)
         }
     }

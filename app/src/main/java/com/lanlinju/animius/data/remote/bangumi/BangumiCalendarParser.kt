@@ -68,6 +68,11 @@ object BangumiCalendarParser {
                     summary = item.summary.trim(),
                     tags = item.tags.map { it.trim() }.filter { it.isNotEmpty() }.take(10),
                     totalEpisodes = item.totalEpisodes,
+                    aliases = item.aliases
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .distinct()
+                        .take(8),
                 )
             }
 

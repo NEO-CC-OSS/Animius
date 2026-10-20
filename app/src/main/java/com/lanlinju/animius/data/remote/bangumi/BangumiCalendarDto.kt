@@ -39,4 +39,6 @@ data class BangumiItemDto(
     val summary: String = "",
     val tags: List<String> = emptyList(),
     @SerialName("total_episodes") val totalEpisodes: Int = 0,
+    /* Bangumi infobox 里的别名（海贼王这类）；旧缓存没有该字段时为空 */
+    val aliases: List<String> = emptyList(),
 )

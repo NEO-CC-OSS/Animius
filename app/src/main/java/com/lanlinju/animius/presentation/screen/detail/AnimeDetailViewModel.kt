@@ -86,9 +86,11 @@ class AnimeDetailViewModel @Inject constructor(
     var detailUrl: String
     var mode: SourceMode
 
-    private val metadataId: Long
     private val metadataTitle: String
     private var metadataItem: MetadataItem? = null
+
+    /** Bangumi id：播放失败时清缓存、换源成功后写回 */
+    val metadataId: Long
 
     /** 连续点重试时取消上一轮解析，避免两个协程互相覆盖状态 */
     private var resolveJob: Job? = null
@@ -103,6 +105,10 @@ class AnimeDetailViewModel @Inject constructor(
     /** 元数据原名：换源搜索中文标题失败时的兜底 */
     val originalTitle: String
         get() = metadataItem?.originalTitle.orEmpty()
+
+    /** 元数据别名（Bangumi infobox）：搜索与换源时一并使用 */
+    val aliases: List<String>
+        get() = metadataItem?.aliases.orEmpty()
 
     init {
         savedStateHandle.toRoute<Screen.AnimeDetail>().let {
@@ -148,6 +154,7 @@ class AnimeDetailViewModel @Inject constructor(
                 val result = sourceResolver.resolve(
                     title = title,
                     originalTitle = item?.originalTitle.orEmpty(),
+                    aliases = item?.aliases.orEmpty(),
                     metadataId = metadataId,
                     currentMode = mode,
                     onProgress = { progress ->

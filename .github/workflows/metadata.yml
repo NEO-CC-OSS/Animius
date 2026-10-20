@@ -112,7 +112,25 @@ jobs:
                 value: {
                   summary: ((.summary // "") | .[0:200]),
                   tags: [((.tags // [])[] | .name)][0:10],
-                  total_episodes: (.total_episodes // 0)
+                  total_episodes: (.total_episodes // 0),
+                  aliases: (
+                    [
+                      ((.infobox // [])[]
+                        | select(.key == "别名" or .key == "中文名"
+                                 or .key == "英文名" or .key == "日文名")
+                        | .value
+                        | if type == "array"
+                          then (.[] | if type == "object" then (.v // .k // empty) else . end)
+                          elif type == "string" then .
+                          else empty end
+                      )
+                    ]
+                    | map(select(type == "string"))
+                    | map(gsub("^[[:space:]]+|[[:space:]]+$"; ""))
+                    | map(select(length > 0))
+                    | unique
+                    | .[0:8]
+                  )
                 }
               }) | from_entries
             ' subjects/*.json > subjects.json \
@@ -123,7 +141,8 @@ jobs:
                   | $item + {
                       summary: ($d.summary // ""),
                       tags: ($d.tags // []),
-                      total_episodes: ($d.total_episodes // 0)
+                      total_episodes: ($d.total_episodes // 0),
+                      aliases: ($d.aliases // [])
                     }
                 ))
               ' calendar.json > calendar.with-details.json \
@@ -136,6 +155,7 @@ jobs:
           fi
           echo "calendar with details bytes: $(wc -c < calendar.json)"
           echo "items with summary: $(jq '[.days[].items[] | select((.summary // "") != "")] | length' calendar.json)"
+          echo "items with aliases: $(jq '[.days[].items[] | select((.aliases // []) | length > 0)] | length' calendar.json)"
           jq -e '(.schema == 1) and (.days | length == 7)' calendar.json
 
       - name: Install Pillow

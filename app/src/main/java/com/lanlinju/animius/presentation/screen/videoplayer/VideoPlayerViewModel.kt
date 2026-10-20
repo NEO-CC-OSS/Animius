@@ -177,6 +177,9 @@ class VideoPlayerViewModel @Inject constructor(
                 "VIDEO error mode=$currentMode ep=$episodeUrl reason=${result.error.message}"
                     .log("BehaviorTrace")
                 if (allowSourceSwitch) {
+                    // 详情能打开不代表能播（如 Age动漫部分条目禁止网页播放）：
+                    // 清掉缓存，避免 7 天内一直命中坏源
+                    playerParams?.let { sourceResolver.invalidate(it.metadataId, it.title) }
                     switchSource(index, result.error)
                 } else {
                     _videoState.value = Resource.Error(result.error)
@@ -209,6 +212,7 @@ class VideoPlayerViewModel @Inject constructor(
         val result = sourceResolver.resolveEpisode(
             title = params.title,
             originalTitle = params.originalTitle,
+            aliases = params.aliases,
             episodeNumber = episodeNumber,
             currentMode = currentMode,
             exclude = setOf(currentMode),
@@ -225,6 +229,14 @@ class VideoPlayerViewModel @Inject constructor(
                 playerParams = params.copy(
                     episodes = episode.episodes,
                     episodeIndex = episode.episodeIndex,
+                )
+                // 换源成功：把可用源写回缓存，下次进入直接命中
+                sourceResolver.remember(
+                    metadataId = params.metadataId,
+                    title = params.title,
+                    mode = episode.mode,
+                    detailUrl = episode.detailUrl,
+                    siteTitle = episode.siteTitle,
                 )
                 // retry/换集要用新源的地址与索引；历史 Id 按新地址再查一次
                 currentEpisodeUrl = episode.episodeUrl
