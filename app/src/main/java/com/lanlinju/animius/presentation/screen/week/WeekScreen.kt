@@ -130,6 +130,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun WeekScreen(
     onNavigateToAnimeDetail: (detailUrl: String, mode: SourceMode) -> Unit,
+    onNavigateToMetadataDetail: (metadataId: Long, title: String) -> Unit,
     onNavigateToSearchWithQuery: (String) -> Unit,
     onNavigateToHistory: () -> Unit,
     onNavigateToDownload: () -> Unit,
@@ -242,12 +243,16 @@ fun WeekScreen(
                                     val metadataShown =
                                         metadataInfo.origin == WeekDataOrigin.Metadata ||
                                             metadataInfo.origin == WeekDataOrigin.MetadataCache
-                                    if (metadataShown || anime.detailUrl.isBlank()) {
-                                        // 切片 1 的临时落点：元数据条目没有源站详情地址，
-                                        // 先带标题进搜索页；切片 2 换成详情 + 自动选源
-                                        onNavigateToSearchWithQuery(anime.title)
-                                    } else {
-                                        onNavigateToAnimeDetail(
+                                    when {
+                                        // 切片 2：元数据条目进元数据详情页，自动解析可用源
+                                        anime.metadataId > 0 ->
+                                            onNavigateToMetadataDetail(anime.metadataId, anime.title)
+
+                                        metadataShown || anime.detailUrl.isBlank() ->
+                                            // 旧缓存/异常数据没有 id：退回切片 1 的搜索页落点
+                                            onNavigateToSearchWithQuery(anime.title)
+
+                                        else -> onNavigateToAnimeDetail(
                                             anime.detailUrl,
                                             SourceHolder.currentSourceMode
                                         )

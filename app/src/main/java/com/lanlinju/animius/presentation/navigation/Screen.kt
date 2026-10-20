@@ -29,8 +29,19 @@ sealed class Screen {
     @Serializable
     data class DownloadDetail(val detailUrl: String, val title: String) : Screen()
 
+    /**
+     * 源站详情与元数据详情共用同一个页面。
+     *
+     * - 普通入口（搜索/历史/收藏/下载）：detailUrl 非空、metadataId 为 0；
+     * - 周表元数据条目：detailUrl 为空、metadataId > 0，进页后先解析可用源。
+     */
     @Serializable
-    data class AnimeDetail(val detailUrl: String, val mode: SourceMode) : Screen()
+    data class AnimeDetail(
+        val detailUrl: String,
+        val mode: SourceMode,
+        val metadataId: Long = 0,
+        val metadataTitle: String = "",
+    ) : Screen()
 
     @Serializable
     data class VideoPlayer(val parameters: String) : Screen()
@@ -43,6 +54,8 @@ data class PlayerParameters(
     val episodes: List<Episode>,    /* 剧集列表 */
     val mode: SourceMode?,           /* 来源 */
     val isLocalVideo: Boolean = false,   /* 是否为本地视频 */
+    val autoSource: Boolean = false,     /* 取不到播放地址时自动换源（仅元数据点播为 true） */
+    val originalTitle: String = "",      /* 元数据原名：中文标题搜不到时的兜底查询 */
 ) {
     companion object {
         suspend fun serialize(
@@ -50,7 +63,9 @@ data class PlayerParameters(
             episodeIndex: Int,
             episodes: List<Episode>,
             mode: SourceMode? = null,
-            isLocalVideo: Boolean = false
+            isLocalVideo: Boolean = false,
+            autoSource: Boolean = false,
+            originalTitle: String = "",
         ): String {
             return Json.encodeToString(
                 PlayerParameters(
@@ -59,6 +74,8 @@ data class PlayerParameters(
                     episodes,
                     mode,
                     isLocalVideo,
+                    autoSource,
+                    originalTitle,
                 )
             )
         }

@@ -22,6 +22,7 @@ import com.lanlinju.animius.presentation.navigation.AnimeNavHost
 import com.lanlinju.animius.presentation.navigation.Screen
 import com.lanlinju.animius.presentation.screen.crash.CrashActivity
 import com.lanlinju.animius.presentation.theme.AnimeTheme
+import com.lanlinju.animius.util.SourceHolder
 import com.lanlinju.animius.util.getCrashLogInfo
 import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.logCrashToFile
@@ -94,6 +95,17 @@ private fun App(modifier: Modifier = Modifier) {
         navController = navController,
         onNavigateToAnimeDetail = { detailUrl, mode ->
             navigateDebounced(Screen.AnimeDetail(detailUrl, mode))
+        },
+        onNavigateToMetadataDetail = { metadataId, title ->
+            // 元数据条目没有源站地址：进详情页后按标题自动解析可用源
+            navigateDebounced(
+                Screen.AnimeDetail(
+                    detailUrl = "",
+                    mode = SourceHolder.currentSourceMode,
+                    metadataId = metadataId,
+                    metadataTitle = title,
+                )
+            )
         },
         onNavigateToVideoPlay = { parameters ->
             navigateDebounced(Screen.VideoPlayer(parameters))

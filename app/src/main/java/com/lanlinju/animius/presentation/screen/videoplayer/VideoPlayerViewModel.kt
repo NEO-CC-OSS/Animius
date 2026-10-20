@@ -7,6 +7,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import com.anime.danmaku.api.DanmakuSession
+import com.lanlinju.animius.R
+import com.lanlinju.animius.data.repository.EpisodeResolveResult
+import com.lanlinju.animius.data.repository.SourceResolver
+import com.lanlinju.animius.domain.matching.EpisodeNumber
 import com.lanlinju.animius.domain.model.DanmakuResult
 import com.lanlinju.animius.domain.model.Episode
 import com.lanlinju.animius.domain.model.Video
@@ -21,8 +25,6 @@ import com.lanlinju.animius.util.Resource
 import com.lanlinju.animius.util.Result
 import com.lanlinju.animius.util.SourceMode
 import com.lanlinju.animius.util.log
-import com.lanlinju.animius.util.onError
-import com.lanlinju.animius.util.onSuccess
 import com.lanlinju.animius.util.preferences
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +42,7 @@ class VideoPlayerViewModel @Inject constructor(
     private val roomRepository: RoomRepository,
     private val animeRepository: AnimeRepository,
     private val danmakuRepository: DanmakuRepository,
+    private val sourceResolver: SourceResolver,
     private val application: Application
 ) : ViewModel() {
 
@@ -60,9 +63,28 @@ class VideoPlayerViewModel @Inject constructor(
     private val _danmakuStatus = MutableStateFlow<DanmakuResult?>(null)
     val danmakuStatus = _danmakuStatus.asStateFlow()
 
+    // 换源提示（"正在切换播放源…" / "已切换到 X"），由 UI 用浮层显示后清除
+    private val _sourceNotice = MutableStateFlow<String?>(null)
+    val sourceNotice = _sourceNotice.asStateFlow()
+
     // 判断是否为本地视频
     private var isLocalVideo = false
     private var mode: SourceMode? = null
+
+    // 元数据点播才允许取址失败自动换源；搜索/历史/收藏入口保持原行为
+    private var autoSource: Boolean = false
+
+    // 当前播放源名（TV 控制条展示）
+    val currentSourceName: String?
+        get() = mode?.name
+
+    /** 当前番剧标题：失败页「去搜索」用 */
+    val currentTitle: String
+        get() = playerParams?.title.orEmpty()
+
+    /** 是否为元数据点播（失败页显示换源原因与「去搜索」；其他入口保持原 UI） */
+    val canAutoSwitchSource: Boolean
+        get() = autoSource
 
     // 当前集数的URL和历史记录ID
     private var currentEpisodeUrl: String = ""
@@ -82,6 +104,7 @@ class VideoPlayerViewModel @Inject constructor(
                 val params = PlayerParameters.deserialize(it.parameters)
                 playerParams = params
                 this@VideoPlayerViewModel.mode = params.mode
+                this@VideoPlayerViewModel.autoSource = params.autoSource
                 val url = params.episodes[params.episodeIndex].url
                 if (params.isLocalVideo) {
                     // 如果是本地视频，获取本地视频
@@ -92,35 +115,11 @@ class VideoPlayerViewModel @Inject constructor(
                     currentEpisodeIndex = params.episodeIndex
                     // 如果是远程视频，获取历史记录Id并加载远程视频
                     getHistoryId(url)
-
-                    val currentEpisode = params.episodes[params.episodeIndex]
-                    getWebVideo(episodeUrl = currentEpisode.url, mode = params.mode!!)
-                        .onSuccess {
-                            val lastPlayPosition =
-                                roomRepository.getEpisode(currentEpisode.url)
-                                    .first()?.lastPlayPosition ?: 0L
-                            Video(
-                                title = params.title,
-                                url = it.url,
-                                episodeName = currentEpisode.name,
-                                episodeUrl = currentEpisode.url,
-                                lastPlayPosition = lastPlayPosition,
-                                currentEpisodeIndex = params.episodeIndex,
-                                episodes = params.episodes,
-                                headers = it.headers
-                            ).let {
-                                _videoState.value = Resource.Success(it)
-                                "VIDEO success title=${it.title} ep=${it.episodeName}".log("BehaviorTrace")
-
-                                // 获取弹幕会话
-                                fetchDanmakuSession()
-                            }
-                        }
-                        .onError {
-                            _videoState.value = Resource.Error(it)
-                            "VIDEO error ${it.message}".log("BehaviorTrace")
-                        }
-
+                    loadRemoteVideo(
+                        episodeUrl = url,
+                        index = params.episodeIndex,
+                        allowSourceSwitch = params.autoSource,
+                    )
                 }
             }
         }
@@ -163,8 +162,147 @@ class VideoPlayerViewModel @Inject constructor(
         }
     }
 
-    private suspend fun getWebVideo(episodeUrl: String, mode: SourceMode): Result<WebVideo> {
-        return animeRepository.getVideoData(episodeUrl, mode)
+    /**
+     * 加载远程视频；取址失败且允许自动换源时，按集号去下一个源找同一集。
+     */
+    private suspend fun loadRemoteVideo(
+        episodeUrl: String,
+        index: Int,
+        allowSourceSwitch: Boolean,
+    ) {
+        val currentMode = mode ?: return
+        when (val result = animeRepository.getVideoData(episodeUrl, currentMode)) {
+            is Result.Success -> applyVideo(result.data, episodeUrl, index)
+            is Result.Error -> {
+                "VIDEO error mode=$currentMode ep=$episodeUrl reason=${result.error.message}"
+                    .log("BehaviorTrace")
+                if (allowSourceSwitch) {
+                    switchSource(index, result.error)
+                } else {
+                    _videoState.value = Resource.Error(result.error)
+                }
+            }
+        }
+    }
+
+    /**
+     * 取不到播放地址时换源：只按「集号」对应，找不到同集就报错，绝不播成别的集。
+     */
+    private suspend fun switchSource(index: Int, cause: Throwable) {
+        val params = playerParams ?: run {
+            _videoState.value = Resource.Error(cause)
+            return
+        }
+        val currentMode = mode ?: return
+        val episodeName = params.episodes.getOrNull(index)?.name
+        val episodeNumber = episodeName?.let { EpisodeNumber.normalize(it) }
+        if (episodeNumber == null) {
+            // 集号无法识别（SP/特别篇等）：不猜，直接提示失败
+            _videoState.value = Resource.Error(
+                IllegalStateException(application.getString(R.string.source_switch_failed, "无法识别集号"))
+            )
+            "VIDEO switch skipped reason=unknown-episode ep=$episodeName".log("BehaviorTrace")
+            return
+        }
+
+        _sourceNotice.value = application.getString(R.string.source_switching)
+        val result = sourceResolver.resolveEpisode(
+            title = params.title,
+            originalTitle = params.originalTitle,
+            episodeNumber = episodeNumber,
+            currentMode = currentMode,
+            exclude = setOf(currentMode),
+            onProgress = { progress ->
+                _sourceNotice.value = application.getString(R.string.source_switching) +
+                    "（${progress.index}/${progress.total}：${progress.mode.name}）"
+            },
+        )
+
+        when (result) {
+            is EpisodeResolveResult.Success -> {
+                val episode = result.episode
+                mode = episode.mode
+                playerParams = params.copy(
+                    episodes = episode.episodes,
+                    episodeIndex = episode.episodeIndex,
+                )
+                // retry/换集要用新源的地址与索引；历史 Id 按新地址再查一次
+                currentEpisodeUrl = episode.episodeUrl
+                currentEpisodeIndex = episode.episodeIndex
+                getHistoryId(episode.episodeUrl)
+                _sourceNotice.value = application.getString(R.string.source_switched, episode.mode.name)
+                applyVideo(
+                    webVideo = WebVideo(episode.videoUrl, episode.headers),
+                    episodeUrl = episode.episodeUrl,
+                    index = episode.episodeIndex,
+                    episodesOverride = episode.episodes,
+                    episodeNameOverride = episode.episodeName,
+                )
+            }
+
+            is EpisodeResolveResult.Failure -> {
+                _sourceNotice.value = null
+                val reason = result.attempts.joinToString("；") { "${it.mode.name}: ${it.reason}" }
+                val detail = application.getString(
+                    R.string.source_resolve_failed_detail,
+                    result.attempts.size,
+                ) + "：" + reason
+                _videoState.value = Resource.Error(
+                    IllegalStateException(application.getString(R.string.source_switch_failed, detail))
+                )
+                "VIDEO switch failed from=$currentMode ep=$episodeNumber reason=$reason"
+                    .log("BehaviorTrace")
+            }
+        }
+    }
+
+    private suspend fun applyVideo(
+        webVideo: WebVideo,
+        episodeUrl: String,
+        index: Int,
+        episodesOverride: List<Episode>? = null,
+        episodeNameOverride: String? = null,
+    ) {
+        val episodes = episodesOverride
+            ?: _videoState.value.data?.episodes
+            ?: playerParams?.episodes
+            ?: return
+        val episodeName = episodeNameOverride
+            ?: episodes.getOrNull(index)?.name
+            ?: return
+        val lastPlayPosition =
+            roomRepository.getEpisode(episodeUrl).first()?.lastPlayPosition ?: 0L
+        val existing = _videoState.value.data
+        _videoState.value = Resource.Success(
+            // 换集时旧数据还在，在其上合并新地址；retry 时旧数据已被
+            // Resource.Loading 清空（data == null），必须从导航参数重建，
+            // 否则这里就是"重试成功反而崩溃"（P2-4）
+            existing?.copy(
+                url = webVideo.url,
+                currentEpisodeIndex = index,
+                episodeName = episodeName,
+                episodeUrl = episodeUrl,
+                lastPlayPosition = lastPlayPosition,
+                headers = webVideo.headers,
+                episodes = episodes,
+            ) ?: Video(
+                title = playerParams?.title.orEmpty(),
+                url = webVideo.url,
+                episodeName = episodeName,
+                episodeUrl = episodeUrl,
+                lastPlayPosition = lastPlayPosition,
+                currentEpisodeIndex = index,
+                episodes = episodes,
+                headers = webVideo.headers
+            )
+        )
+        "VIDEO success title=${playerParams?.title} ep=$episodeName mode=${mode?.name}"
+            .log("BehaviorTrace")
+        fetchDanmakuSession()
+    }
+
+    fun clearSourceNotice() {
+        _sourceNotice.value = null
     }
 
     /**
@@ -173,45 +311,7 @@ class VideoPlayerViewModel @Inject constructor(
      */
     private fun getVideoFromRemote(episodeUrl: String, index: Int) {
         viewModelScope.launch {
-            // 使用用例从远程获取视频信息
-            getWebVideo(episodeUrl, mode!!)
-                .onSuccess { webVideo ->
-                    val lastPlayPosition =
-                        roomRepository.getEpisode(episodeUrl).first()?.lastPlayPosition ?: 0L
-                    val existing = _videoState.value.data
-                    _videoState.value = Resource.Success(
-                        // 换集时旧数据还在，在其上合并新地址；retry 时旧数据已被
-                        // Resource.Loading 清空（data == null），必须从导航参数重建，
-                        // 否则这里就是"重试成功反而崩溃"（P2-4）
-                        existing?.copy(
-                            url = webVideo.url,
-                            currentEpisodeIndex = index,
-                            episodeName = existing.episodes[index].name,
-                            episodeUrl = episodeUrl,
-                            lastPlayPosition = lastPlayPosition,
-                            headers = webVideo.headers
-                        ) ?: playerParams?.let { params ->
-                            val episode = params.episodes[index]
-                            Video(
-                                title = params.title,
-                                url = webVideo.url,
-                                episodeName = episode.name,
-                                episodeUrl = episodeUrl,
-                                lastPlayPosition = lastPlayPosition,
-                                currentEpisodeIndex = index,
-                                episodes = params.episodes,
-                                headers = webVideo.headers
-                            )
-                        } ?: return@onSuccess
-                    )
-                    "VIDEO remote ep=$episodeUrl".log("BehaviorTrace")
-
-                    fetchDanmakuSession() // 视频加载成功后获取弹幕
-                }
-                .onError {
-                    _videoState.value = Resource.Error(it)
-                    "VIDEO error ${it.message}".log("BehaviorTrace")
-                }
+            loadRemoteVideo(episodeUrl, index, allowSourceSwitch = autoSource)
         }
     }
 

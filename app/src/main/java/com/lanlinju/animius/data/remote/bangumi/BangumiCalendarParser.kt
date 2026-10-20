@@ -55,10 +55,27 @@ object BangumiCalendarParser {
             index to day.items.mapNotNull { it.toAnime() }
         }
 
+        // 详情页按 id 取简介/标签；同一条目重复出现时后写覆盖前写即可
+        val items = dto.days.asSequence()
+            .flatMap { it.items.asSequence() }
+            .filter { it.id > 0 }
+            .associate { item ->
+                item.id to MetadataItem(
+                    id = item.id,
+                    title = item.nameCn.ifBlank { item.name }.trim(),
+                    originalTitle = item.name.trim(),
+                    image = item.image,
+                    summary = item.summary.trim(),
+                    tags = item.tags.map { it.trim() }.filter { it.isNotEmpty() }.take(10),
+                    totalEpisodes = item.totalEpisodes,
+                )
+            }
+
         return BangumiCalendar(
             updatedAt = updatedAt,
             days = days,
             itemCount = days.values.sumOf { it.size },
+            items = items,
         )
     }
 
@@ -82,9 +99,10 @@ object BangumiCalendarParser {
         return Anime(
             title = title,
             img = image,
-            // 元数据条目没有源站详情地址；切片 1 的点击落点是搜索页（带标题预填）
+            // 元数据条目没有源站详情地址；点击时按 id 进元数据详情页（切片 2）
             detailUrl = "",
             episodeName = airDate,
+            metadataId = id,
         )
     }
 }

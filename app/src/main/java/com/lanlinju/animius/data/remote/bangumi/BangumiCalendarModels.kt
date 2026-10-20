@@ -8,6 +8,19 @@ data class BangumiCalendar(
     val updatedAt: Instant,
     val days: Map<Int, List<Anime>>,
     val itemCount: Int,
+    /* 按 Bangumi subject id 索引的详情字段（切片 2）；旧 JSON 没有摘要时为默认值 */
+    val items: Map<Long, MetadataItem> = emptyMap(),
+)
+
+/** 元数据条目的详情字段：周表卡片只需要标题/封面，详情页再取简介/标签 */
+data class MetadataItem(
+    val id: Long,
+    val title: String,
+    val originalTitle: String,
+    val image: String,
+    val summary: String,
+    val tags: List<String>,
+    val totalEpisodes: Int,
 )
 
 enum class CalendarFreshness {

@@ -176,11 +176,13 @@ private val Resizes = arrayOf(
 fun VideoPlayScreen(
     viewModel: VideoPlayerViewModel = hiltViewModel(),
     onBackClick: () -> Unit,
+    onNavigateToSearchWithQuery: (String) -> Unit = {},
 ) {
     val animeVideoState by viewModel.videoState.collectAsStateWithLifecycle()
     val danmakuEnabled by viewModel.danmakuEnabled.collectAsStateWithLifecycle()
     val danmakuSession by viewModel.danmakuSession.collectAsStateWithLifecycle()
     val danmakuStatus by viewModel.danmakuStatus.collectAsStateWithLifecycle()
+    val sourceNotice by viewModel.sourceNotice.collectAsStateWithLifecycle()
     val view = LocalView.current
     val activity = LocalActivity.current ?: LocalActivity.current as Activity
     val isAutoOrientation by rememberPreference(KEY_AUTO_ORIENTATION_ENABLED, true)
@@ -191,8 +193,21 @@ fun VideoPlayScreen(
 
     StateHandler(
         state = animeVideoState,
-        onLoading = { ShowLoadingPage() },
-        onFailure = { ShowFailurePage(viewModel, onBackClick) }
+        onLoading = { ShowLoadingPage(sourceNotice) },
+        onFailure = { resource ->
+            val sourceFailure = viewModel.canAutoSwitchSource
+            ShowFailurePage(
+                viewModel = viewModel,
+                onBackClick = onBackClick,
+                errorMessage = if (sourceFailure) resource.error?.message else null,
+                onSearchClick = if (sourceFailure && viewModel.currentTitle.isNotBlank()) {
+                    { onNavigateToSearchWithQuery(viewModel.currentTitle) }
+                } else {
+                    null
+                },
+                resolveFailed = sourceFailure,
+            )
+        }
     ) { resource ->
         resource.data?.let { video ->
 
@@ -278,7 +293,13 @@ fun VideoPlayScreen(
                 ) {
                     VideoPlayerControl(
                         state = playerState,
-                        title = "${video.title}-${video.episodeName}",
+                        title = buildString {
+                            append(video.title).append('-').append(video.episodeName)
+                            // TV 上显示最终使用的源；手机端保持原标题不变
+                            if (isTv) {
+                                viewModel.currentSourceName?.let { append(" · ").append(it) }
+                            }
+                        },
                         danmakuEnabled = danmakuEnabled,
                         onBackClick = { handleBackPress(playerState, onBackClick, view, activity, lastBackPressAtMs, { backHintVisible = true }) },
                         onNextClick = {
@@ -302,6 +323,18 @@ fun VideoPlayScreen(
                 // Danmaku and additional UI components
                 DanmakuHost(playerState, danmakuSession, danmakuEnabled)
                 DanmakuStatusMessage(danmakuStatus)
+
+                // 自动换源提示（"正在切换播放源…" / "已切换到 X"），2.5 秒后自动消失
+                sourceNotice?.let { notice ->
+                    LaunchedEffect(notice) {
+                        delay(2500)
+                        viewModel.clearSourceNotice()
+                    }
+                    FloatingMessageIndicator(
+                        text = notice,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
 
                 // TV 直控：返回退出确认提示（屏幕居中，2 秒无操作自动淡出）
                 AnimatedVisibility(
@@ -369,20 +402,36 @@ private fun ManageScreenState(view: View, activity: Activity) {
 
 // Loading screen composable
 @Composable
-private fun ShowLoadingPage() {
+private fun ShowLoadingPage(notice: String? = null) {
     Box(
         modifier = Modifier
             .background(Color.Black)
             .fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
-        CircularProgressIndicator()
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator()
+            if (!notice.isNullOrBlank()) {
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    text = notice,
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
     }
 }
 
 // Failure screen composable
 @Composable
-private fun ShowFailurePage(viewModel: VideoPlayerViewModel, onBackClick: () -> Unit) {
+private fun ShowFailurePage(
+    viewModel: VideoPlayerViewModel,
+    onBackClick: () -> Unit,
+    errorMessage: String? = null,
+    onSearchClick: (() -> Unit)? = null,
+    resolveFailed: Boolean = false,
+) {
     val context = LocalContext.current
     val isTv = remember { isAndroidTV(context) }
     val retryFocusRequester = remember { FocusRequester() }
@@ -401,16 +450,40 @@ private fun ShowFailurePage(viewModel: VideoPlayerViewModel, onBackClick: () -> 
         )
         Spacer(modifier = Modifier.padding(vertical = 8.dp))
         Text(
-            text = stringResource(id = R.string.txt_empty_result),
+            text = stringResource(
+                id = if (resolveFailed) R.string.source_resolve_failed else R.string.txt_empty_result
+            ),
             color = Color.White,
             style = MaterialTheme.typography.bodyMedium
         )
+        if (!errorMessage.isNullOrBlank()) {
+            Spacer(modifier = Modifier.padding(vertical = 4.dp))
+            Text(
+                text = errorMessage,
+                color = Color.White.copy(alpha = 0.8f),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 5,
+                modifier = Modifier.padding(horizontal = 32.dp)
+            )
+        }
         Spacer(modifier = Modifier.padding(vertical = 8.dp))
         OutlinedButton(
             onClick = onBackClick,
             modifier = Modifier.tvFocus(shape = CircleShape)
         ) {
             Text(text = stringResource(id = R.string.back), color = Color.White)
+        }
+        if (onSearchClick != null) {
+            Spacer(modifier = Modifier.padding(vertical = 4.dp))
+            OutlinedButton(
+                onClick = onSearchClick,
+                modifier = Modifier.tvFocus(shape = CircleShape)
+            ) {
+                Text(
+                    text = stringResource(id = R.string.source_search_manually),
+                    color = Color.White
+                )
+            }
         }
         Spacer(modifier = Modifier.padding(vertical = 8.dp))
         OutlinedButton(

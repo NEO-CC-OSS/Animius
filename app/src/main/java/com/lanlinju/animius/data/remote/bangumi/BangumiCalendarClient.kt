@@ -76,6 +76,22 @@ class BangumiCalendarClient @Inject constructor(
     private val cacheFile: File
         get() = File(cacheDir, CACHE_FILE)
 
+    /** 最近一次成功解析的周表：详情页按 id 取简介/标签时避免重复解析 6+ MB JSON */
+    @Volatile
+    private var lastCalendar: BangumiCalendar? = null
+
+    /** 进程内已加载过就直接取；没加载过返回 null（调用方可用 [loadItem]） */
+    fun findItem(id: Long): MetadataItem? = lastCalendar?.items?.get(id)
+
+    /** 按 Bangumi id 取元数据详情；必要时先加载（优先本地缓存）周表 */
+    suspend fun loadItem(id: Long, forceRefresh: Boolean = false): MetadataItem? {
+        if (!forceRefresh) findItem(id)?.let { return it }
+        return when (val result = load(forceRefresh)) {
+            is CalendarLoadResult.Success -> result.calendar.items[id]
+            is CalendarLoadResult.Unavailable -> null
+        }
+    }
+
     suspend fun load(
         forceRefresh: Boolean = false,
         now: Instant = Instant.now(),
@@ -84,6 +100,7 @@ class BangumiCalendarClient @Inject constructor(
 
         val cached = readCache(now)
         if (!forceRefresh && cached != null && cached.freshness == CalendarFreshness.FRESH) {
+            lastCalendar = cached.calendar
             (
                 "META load ok origin=cache freshness=FRESH items=${cached.calendar.itemCount} " +
                     "updated_at=${cached.calendar.updatedAt}"
@@ -98,6 +115,7 @@ class BangumiCalendarClient @Inject constructor(
         when (val network = fetchFromNetwork(now)) {
             is NetworkResult.Success -> {
                 writeCache(network.raw)
+                lastCalendar = network.calendar
                 (
                     "META load ok origin=network freshness=${network.freshness} " +
                         "items=${network.calendar.itemCount} updated_at=${network.calendar.updatedAt}"
@@ -111,6 +129,7 @@ class BangumiCalendarClient @Inject constructor(
 
             is NetworkResult.Failure -> {
                 if (cached != null) {
+                    lastCalendar = cached.calendar
                     (
                         "META load ok origin=cache freshness=${cached.freshness} " +
                             "items=${cached.calendar.itemCount} reason=${network.reason}"

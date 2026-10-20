@@ -25,6 +25,7 @@ fun AnimeNavHost(
     modifier: Modifier = Modifier,
     navController: NavHostController,
     onNavigateToAnimeDetail: (detailUrl: String, mode: SourceMode) -> Unit,
+    onNavigateToMetadataDetail: (metadataId: Long, title: String) -> Unit,
     onNavigateToVideoPlay: (parameters: String) -> Unit,
     onNavigateToHistory: () -> Unit,
     onNavigateToDownload: () -> Unit,
@@ -43,6 +44,7 @@ fun AnimeNavHost(
         composable<Screen.Main> {
             MainScreen(
                 onNavigateToAnimeDetail = onNavigateToAnimeDetail,
+                onNavigateToMetadataDetail = onNavigateToMetadataDetail,
                 onNavigateToSearch = onNavigateToSearch,
                 onNavigateToSearchWithQuery = onNavigateToSearchWithQuery,
                 onNavigateToHistory = onNavigateToHistory,
@@ -55,6 +57,7 @@ fun AnimeNavHost(
             AnimeDetailScreen(
                 onRelatedAnimeClick = onNavigateToAnimeDetail,
                 onNavigateToVideoPlay = onNavigateToVideoPlay,
+                onNavigateToSearchWithQuery = onNavigateToSearchWithQuery,
                 onBackClick = onBackClick
             )
         }
@@ -62,7 +65,10 @@ fun AnimeNavHost(
             enterTransition = { fadeIn() },
             popExitTransition = { fadeOut(animationSpec = tween(durationMillis = 35)) }
         ) {
-            VideoPlayScreen(onBackClick = onBackClick)
+            VideoPlayScreen(
+                onBackClick = onBackClick,
+                onNavigateToSearchWithQuery = onNavigateToSearchWithQuery,
+            )
         }
         composable<Screen.Search> { entry ->
             val route = entry.toRoute<Screen.Search>()

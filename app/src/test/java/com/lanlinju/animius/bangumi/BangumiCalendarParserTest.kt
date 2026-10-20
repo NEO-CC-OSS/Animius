@@ -19,9 +19,15 @@ class BangumiCalendarParserTest {
         nameCn: String = "",
         image: String = "data:image/webp;base64,AA==",
         airDate: String = "2026-10-05",
-    ): String =
-        """{"id":$id,"name":"$name","name_cn":"$nameCn","image":"$image",""" +
-            """"air_date":"$airDate","air_weekday":1,"rank":0}"""
+        summary: String = "",
+        tags: List<String> = emptyList(),
+        totalEpisodes: Int = 0,
+    ): String {
+        val tagsJson = tags.joinToString(",") { "\"$it\"" }
+        return """{"id":$id,"name":"$name","name_cn":"$nameCn","image":"$image",""" +
+            """"air_date":"$airDate","air_weekday":1,"rank":0,""" +
+            """"summary":"$summary","tags":[$tagsJson],"total_episodes":$totalEpisodes}"""
+    }
 
     private fun days(items: Map<Int, List<String>> = emptyMap()): String =
         (1..7).joinToString(",") { weekday ->
@@ -91,6 +97,52 @@ class BangumiCalendarParserTest {
         assertEquals("", anime.img)
         assertEquals("", anime.episodeName)
         assertEquals("", anime.detailUrl)
+    }
+
+    @Test
+    fun `keeps metadata id on list items and exposes detail fields by id`() {
+        val raw = calendarJson(
+            days = days(
+                mapOf(
+                    1 to listOf(
+                        item(
+                            id = 77,
+                            name = "Original",
+                            nameCn = "中文名",
+                            summary = "简介",
+                            tags = listOf("TV", "奇幻"),
+                            totalEpisodes = 12,
+                        )
+                    )
+                )
+            )
+        )
+
+        val parsed = BangumiCalendarParser.parse(raw, now)
+        val anime = parsed.days.getValue(0).single()
+        val meta = parsed.items.getValue(77)
+
+        assertEquals(77L, anime.metadataId)
+        assertEquals("中文名", meta.title)
+        assertEquals("Original", meta.originalTitle)
+        assertEquals("简介", meta.summary)
+        assertEquals(listOf("TV", "奇幻"), meta.tags)
+        assertEquals(12, meta.totalEpisodes)
+    }
+
+    @Test
+    fun `old json without detail fields still parses`() {
+        val raw = calendarJson(
+            days = days(mapOf(1 to listOf("""{"id":9,"name":"OnlyName"}""")))
+        )
+
+        val parsed = BangumiCalendarParser.parse(raw, now)
+        val meta = parsed.items.getValue(9)
+
+        assertEquals("OnlyName", meta.title)
+        assertEquals("", meta.summary)
+        assertEquals(emptyList<String>(), meta.tags)
+        assertEquals(0, meta.totalEpisodes)
     }
 
     @Test

@@ -100,6 +100,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.lanlinju.animius.R
+import com.lanlinju.animius.domain.matching.TitleMatcher
 import com.lanlinju.animius.domain.model.Anime
 import com.lanlinju.animius.domain.model.AnimeDetail
 import com.lanlinju.animius.domain.model.Download
@@ -136,25 +137,49 @@ fun AnimeDetailScreen(
     viewModel: AnimeDetailViewModel = hiltViewModel(),
     onBackClick: () -> Unit,
     onRelatedAnimeClick: (detailUrl: String, mode: SourceMode) -> Unit,
-    onNavigateToVideoPlay: (parameters: String) -> Unit
+    onNavigateToVideoPlay: (parameters: String) -> Unit,
+    onNavigateToSearchWithQuery: (String) -> Unit = {},
 ) {
     val scrollState = rememberScrollState()
     val bannerHeight = dimensionResource(Res.dimen.banner_height)
 
     val animeDetailState by viewModel.animeDetailState.collectAsStateWithLifecycle()
     val isFavourite by viewModel.isFavourite.collectAsStateWithLifecycle()
+    val sourceInfo by viewModel.sourceInfo.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     StateHandler(
         state = animeDetailState,
-        onLoading = { LoadingIndicator() },
+        onLoading = { ResolvingIndicator(sourceInfo) },
         onFailure = {
+            val resolveFailed = viewModel.isMetadataDetail && sourceInfo is SourceInfoState.Failed
+            val detailText = when (val info = sourceInfo) {
+                is SourceInfoState.Failed ->
+                    stringResource(Res.string.source_resolve_failed_detail, info.attempts) +
+                        "：" + info.reason
+
+                else -> it.error?.message ?: stringResource(id = R.string.unknown_error)
+            }
             WarningMessage(
-                textId = Res.string.txt_empty_result,
-                extraText = it.error?.message ?: stringResource(id = R.string.unknown_error),
-                onRetryClick = { viewModel.retry() }
+                textId = if (resolveFailed) {
+                    Res.string.source_resolve_failed
+                } else {
+                    Res.string.txt_empty_result
+                },
+                extraText = detailText,
+                onRetryClick = { viewModel.retry() },
+                secondaryTextId = if (resolveFailed) {
+                    Res.string.source_search_manually
+                } else {
+                    null
+                },
+                onSecondaryClick = if (resolveFailed) {
+                    { onNavigateToSearchWithQuery(viewModel.searchTitle) }
+                } else {
+                    null
+                },
             )
         }
     ) { resource ->
@@ -226,6 +251,7 @@ fun AnimeDetailScreen(
                             description = Html
                                 .fromHtml(animeDetail.desc, Html.FROM_HTML_MODE_COMPACT)
                                 .toString(),
+                            sourceLabel = sourceLabel(sourceInfo),
                             modifier = Modifier
                                 .padding(
                                     start = dimensionResource(Res.dimen.large_padding)
@@ -291,11 +317,14 @@ fun AnimeDetailScreen(
                             )
                         }
 
-                        AnimeRelated(
-                            animes = animeDetail.relatedAnimes,
-                            contentPadding = PaddingValues(horizontal = dimensionResource(Res.dimen.large_padding)),
-                            onRelatedAnimeClick = { onRelatedAnimeClick(it, viewModel.mode) }
-                        )
+                        // 元数据详情没有相关推荐（切片 3 再做）；空列表时整块隐藏，避免只剩标题
+                        if (animeDetail.relatedAnimes.isNotEmpty()) {
+                            AnimeRelated(
+                                animes = animeDetail.relatedAnimes,
+                                contentPadding = PaddingValues(horizontal = dimensionResource(Res.dimen.large_padding)),
+                                onRelatedAnimeClick = { onRelatedAnimeClick(it, viewModel.mode) }
+                            )
+                        }
                     }
 
                     Box(
@@ -396,6 +425,53 @@ fun AnimeDetailScreen(
             }
         }
     }
+}
+
+/** 元数据详情加载中：显示「正在查找可用源（n/6）」 */
+@Composable
+private fun ResolvingIndicator(state: SourceInfoState) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        LoadingIndicator()
+        if (state is SourceInfoState.Resolving) {
+            Spacer(Modifier.height(12.dp))
+            val text = if (state.total > 0) {
+                stringResource(
+                    Res.string.source_resolving,
+                    state.index,
+                    state.total,
+                    state.mode?.name.orEmpty(),
+                )
+            } else {
+                stringResource(Res.string.source_resolving_start)
+            }
+            Text(
+                text = text,
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+}
+
+/** 「播放源：X」；站点标题与元数据标题差异较大时一并显示，方便一眼核对有没有进错番 */
+@Composable
+private fun sourceLabel(state: SourceInfoState): String? = when (state) {
+    is SourceInfoState.Ready -> {
+        val siteTitle = state.siteTitle
+        if (siteTitle.isNotBlank() &&
+            TitleMatcher.normalize(siteTitle) != TitleMatcher.normalize(state.metadataTitle)
+        ) {
+            stringResource(Res.string.source_label_with_site_title, state.mode.name, siteTitle)
+        } else {
+            stringResource(Res.string.source_label, state.mode.name)
+        }
+    }
+
+    else -> null
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -555,7 +631,8 @@ fun AnimeBanner(
 fun AnimeDetails(
     title: String,
     description: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    sourceLabel: String? = null,
 ) {
     Column(modifier) {
         Text(
@@ -565,6 +642,17 @@ fun AnimeDetails(
             maxLines = 4,
             overflow = TextOverflow.Ellipsis
         )
+
+        if (!sourceLabel.isNullOrBlank()) {
+            Text(
+                text = sourceLabel,
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+        }
 
         ScrollableText(text = description)
     }
@@ -688,7 +776,10 @@ private fun handleEpisodeSelection(
                 title = title,
                 episodeIndex = index,
                 episodes = episodes.conditionalReverse(reverseList),
-                mode = viewModel.mode
+                mode = viewModel.mode,
+                // 元数据点播：取不到播放地址时自动换源；源站入口保持原行为
+                autoSource = viewModel.isMetadataDetail,
+                originalTitle = viewModel.originalTitle,
             ).let(onNavigateToVideoPlay)
         }
     }
@@ -886,21 +977,24 @@ fun ChannelSelectorDialog(
             Text(text = stringResource(Res.string.channel_selection))
         },
         text = {
-            // 显示所有剧集线路
+            // 显示所有剧集线路；按真实 key 排序，兼容非连续线路（如 {1,2}）
+            val channelKeys = channels.keys.sorted()
             LazyColumn(
                 modifier = modifier,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(channels.size) { index ->
+                items(channelKeys.size) { position ->
+                    val key = channelKeys[position]
                     Text(
-                        text = stringResource(Res.string.channel_number, index + 1),
-                        color = if (index == channelIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
+                        // 与剧集区的「线路 N」保持同一口径：N = 线路 key + 1
+                        text = stringResource(Res.string.channel_number, key + 1),
+                        color = if (key == channelIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(MaterialTheme.shapes.small)
                             .background(MaterialTheme.colorScheme.surfaceVariant)
                             .clickable {
-                                onChannelClick(index, channels[index]!!)
+                                onChannelClick(key, channels[key].orEmpty())
                             }
                             .padding(16.dp)
                     )

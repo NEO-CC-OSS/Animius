@@ -6,7 +6,9 @@ import android.content.SharedPreferences
 import androidx.room.Room
 import com.lanlinju.animius.application.AnimeApplication
 import com.lanlinju.animius.data.local.database.AnimeDatabase
+import com.lanlinju.animius.data.repository.FileSourceMatchStore
 import com.lanlinju.animius.data.repository.RoomRepositoryImpl
+import com.lanlinju.animius.data.repository.SourceMatchStore
 import com.lanlinju.animius.domain.repository.RoomRepository
 import com.lanlinju.animius.util.ANIME_DATABASE
 import com.lanlinju.animius.util.createHttpClient
@@ -66,6 +68,12 @@ object AppModule {
     @Provides
     fun providesPreferences(@ApplicationContext context: Context): SharedPreferences {
         return context.preferences
+    }
+
+    @Singleton
+    @Provides
+    fun providesSourceMatchStore(@ApplicationContext context: Context): SourceMatchStore {
+        return FileSourceMatchStore(context)
     }
 
     @Singleton

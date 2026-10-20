@@ -36,6 +36,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun MainScreen(
     onNavigateToAnimeDetail: (detailUrl: String, mode: SourceMode) -> Unit,
+    onNavigateToMetadataDetail: (metadataId: Long, title: String) -> Unit,
     onNavigateToHistory: () -> Unit,
     onNavigateToDownload: () -> Unit,
     onNavigateToSearch: () -> Unit,
@@ -78,6 +79,7 @@ fun MainScreen(
             when (page) {
                 0 -> WeekScreen(
                     onNavigateToAnimeDetail = onNavigateToAnimeDetail,
+                    onNavigateToMetadataDetail = onNavigateToMetadataDetail,
                     onNavigateToSearchWithQuery = onNavigateToSearchWithQuery,
                     onNavigateToSearch = onNavigateToSearch,
                     onNavigateToHistory = onNavigateToHistory,

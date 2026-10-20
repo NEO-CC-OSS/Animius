@@ -77,6 +77,67 @@ jobs:
           echo "compact bytes: $(wc -c < calendar.json)"
           jq -c '{updated_at, days: [.days[] | {weekday, count: (.items|length)}]}' calendar.json
 
+      - name: Fetch subject summaries
+        run: |
+          set -euo pipefail
+          UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius)"
+          mkdir -p subjects
+          ok=0
+          fail=0
+          # 切片 2：详情页需要简介/标签。逐条取 /v0/subjects/{id}，串行 + 0.3s 间隔；
+          # 单条失败留空，不让整轮日历生成失败。总预算 10 分钟。
+          deadline=$((SECONDS + 600))
+          while read -r id; do
+            [ -n "$id" ] || continue
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "subject fetch stopped early (elapsed=${SECONDS}s)"
+              break
+            fi
+            if curl -fsSL --retry 2 --retry-delay 2 --max-time 15 -A "$UA" \
+                -o "subjects/${id}.json" "https://api.bgm.tv/v0/subjects/${id}"; then
+              ok=$((ok+1))
+            else
+              echo "subject failed: id=$id"
+              rm -f "subjects/${id}.json"
+              fail=$((fail+1))
+            fi
+            sleep 0.3
+          done < <(jq -r '[.days[].items[].id] | unique[]' calendar.json)
+          echo "subjects ok=$ok fail=$fail"
+          # 详情合并是增强项：任何一步失败都保留原日历继续发布，不让整轮数据变红
+          if compgen -G "subjects/*.json" > /dev/null; then
+            if jq -s '
+              map({
+                key: (.id | tostring),
+                value: {
+                  summary: ((.summary // "") | .[0:200]),
+                  tags: [((.tags // [])[] | .name)][0:10],
+                  total_episodes: (.total_episodes // 0)
+                }
+              }) | from_entries
+            ' subjects/*.json > subjects.json \
+              && jq --slurpfile details subjects.json '
+                .days |= map(.items |= map(
+                  . as $item
+                  | ($details[0][($item.id | tostring)] // {}) as $d
+                  | $item + {
+                      summary: ($d.summary // ""),
+                      tags: ($d.tags // []),
+                      total_episodes: ($d.total_episodes // 0)
+                    }
+                ))
+              ' calendar.json > calendar.with-details.json \
+              && jq -e '(.schema == 1) and (.days | length == 7)' calendar.with-details.json > /dev/null; then
+              mv calendar.with-details.json calendar.json
+            else
+              echo "subject summary merge failed; keep calendar without details"
+              rm -f calendar.with-details.json
+            fi
+          fi
+          echo "calendar with details bytes: $(wc -c < calendar.json)"
+          echo "items with summary: $(jq '[.days[].items[] | select((.summary // "") != "")] | length' calendar.json)"
+          jq -e '(.schema == 1) and (.days | length == 7)' calendar.json
+
       - name: Install Pillow
         run: python3 -m pip install --user --quiet pillow
 

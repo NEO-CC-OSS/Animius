@@ -20,6 +20,8 @@ fun WarningMessage(
     @StringRes textId: Int,
     extraText: String = "",
     onRetryClick: (() -> Unit)? = null,
+    @StringRes secondaryTextId: Int? = null,
+    onSecondaryClick: (() -> Unit)? = null,
 ) {
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -45,6 +47,12 @@ fun WarningMessage(
         if (onRetryClick != null) {
             OutlinedButton(onClick = onRetryClick) {
                 Text(text = stringResource(id = R.string.lbl_retry))
+            }
+        }
+        if (secondaryTextId != null && onSecondaryClick != null) {
+            Spacer(modifier = Modifier.padding(vertical = 4.dp))
+            OutlinedButton(onClick = onSecondaryClick) {
+                Text(text = stringResource(id = secondaryTextId))
             }
         }
 

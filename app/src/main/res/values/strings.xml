@@ -158,4 +158,16 @@
     <string name="use_download_directory">使用Download目录</string>
     <string name="auto_continue_play">自动连播</string>
     <string name="auto_play_next">%1$ds后自动播放下一集...</string>
+
+    <!-- tv.7 切片 2：元数据详情 + 自动选源 -->
+    <string name="source_resolving_start">正在查找可用源…</string>
+    <string name="source_resolving">正在查找可用源…（%1$d/%2$d：%3$s）</string>
+    <string name="source_label">播放源：%1$s</string>
+    <string name="source_label_with_site_title">播放源：%1$s · 站点标题：%2$s</string>
+    <string name="source_resolve_failed">没有找到可用源</string>
+    <string name="source_resolve_failed_detail">已试 %1$d 个源</string>
+    <string name="source_search_manually">去搜索</string>
+    <string name="source_switching">正在切换播放源…</string>
+    <string name="source_switched">已切换到 %1$s</string>
+    <string name="source_switch_failed">换源失败：%1$s</string>
 </resources>
