@@ -86,6 +86,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -93,6 +94,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.lanlinju.animius.R
+import com.lanlinju.animius.data.remote.bangumi.CalendarFreshness
 import com.lanlinju.animius.domain.model.Anime
 import com.lanlinju.animius.domain.model.UpdateState
 import com.lanlinju.animius.presentation.component.LoadingIndicator
@@ -116,7 +118,10 @@ import com.lanlinju.animius.util.isAndroidTV
 import com.lanlinju.animius.util.isWideScreen
 import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.rememberPreference
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -125,6 +130,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun WeekScreen(
     onNavigateToAnimeDetail: (detailUrl: String, mode: SourceMode) -> Unit,
+    onNavigateToSearchWithQuery: (String) -> Unit,
     onNavigateToHistory: () -> Unit,
     onNavigateToDownload: () -> Unit,
     onNavigateToSearch: () -> Unit,
@@ -133,6 +139,7 @@ fun WeekScreen(
 ) {
     val viewModel = hiltViewModel<WeekViewModel>()
     val weekDataState by viewModel.weekDataMap.collectAsState()
+    val metadataInfo by viewModel.metadataInfo.collectAsState()
     val isUpdateAvailable by viewModel.isUpdateAvailable.collectAsState()
     val isUpdateCheckInProgress by viewModel.isUpdateCheckInProgress.collectAsState()
     val updateState by viewModel.updateState.collectAsState()
@@ -155,15 +162,27 @@ fun WeekScreen(
                     Column(
                         modifier = Modifier
                             .tvFocus(shape = RoundedCornerShape(8.dp))
-                            .clickable { showSourceSwitchDialog = true }
+                            .clickable {
+                                // 回退/双失败时点标题直接重试；正常状态仍打开源切换
+                                val canRetry =
+                                    metadataInfo.origin == WeekDataOrigin.SourceSite ||
+                                        metadataInfo.origin == WeekDataOrigin.Unavailable
+                                if (canRetry) {
+                                    viewModel.refresh()
+                                } else {
+                                    showSourceSwitchDialog = true
+                                }
+                            }
                     ) {
                         Text(
                             text = stringResource(id = R.string.lbl_schedule),
                             style = MaterialTheme.typography.titleLarge
                         )
                         Text(
-                            text = SourceHolder.currentSourceMode.name,
-                            style = MaterialTheme.typography.bodyLarge
+                            text = weekStatusText(metadataInfo),
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
 
@@ -219,11 +238,20 @@ fun WeekScreen(
                                 list = list,
                                 page = page,
                                 pagerState = pagerState,
-                                onItemClicked = {
-                                    onNavigateToAnimeDetail(
-                                        it.detailUrl,
-                                        SourceHolder.currentSourceMode
-                                    )
+                                onItemClicked = { anime ->
+                                    val metadataShown =
+                                        metadataInfo.origin == WeekDataOrigin.Metadata ||
+                                            metadataInfo.origin == WeekDataOrigin.MetadataCache
+                                    if (metadataShown || anime.detailUrl.isBlank()) {
+                                        // 切片 1 的临时落点：元数据条目没有源站详情地址，
+                                        // 先带标题进搜索页；切片 2 换成详情 + 自动选源
+                                        onNavigateToSearchWithQuery(anime.title)
+                                    } else {
+                                        onNavigateToAnimeDetail(
+                                            anime.detailUrl,
+                                            SourceHolder.currentSourceMode
+                                        )
+                                    }
                                 }
                             )
                         }
@@ -254,6 +282,36 @@ fun WeekScreen(
         )
     }
 
+}
+
+private val metadataTimeFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm")
+
+private fun formatMetadataTime(instant: Instant): String =
+    metadataTimeFormatter.format(instant.atZone(ZoneId.systemDefault()))
+
+/** 顶部第二行：元数据更新时间 / 缓存提示 / 回退提示 */
+@Composable
+private fun weekStatusText(info: WeekMetadataInfo): String {
+    val time = info.updatedAt?.let(::formatMetadataTime).orEmpty()
+    return when (info.origin) {
+        WeekDataOrigin.Loading -> stringResource(R.string.week_metadata_loading)
+        WeekDataOrigin.Metadata -> {
+            if (info.freshness == CalendarFreshness.STALE) {
+                stringResource(R.string.week_metadata_stale, time)
+            } else {
+                stringResource(R.string.week_metadata_updated, time)
+            }
+        }
+        WeekDataOrigin.MetadataCache -> {
+            if (info.freshness == CalendarFreshness.STALE) {
+                stringResource(R.string.week_metadata_cache, time)
+            } else {
+                stringResource(R.string.week_metadata_cached, time)
+            }
+        }
+        WeekDataOrigin.SourceSite -> stringResource(R.string.week_metadata_fallback)
+        WeekDataOrigin.Unavailable -> stringResource(R.string.week_metadata_unavailable)
+    }
 }
 
 @Composable

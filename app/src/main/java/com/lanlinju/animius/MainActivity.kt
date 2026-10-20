@@ -111,7 +111,10 @@ private fun App(modifier: Modifier = Modifier) {
             navigateDebounced(Screen.DownloadDetail(detailUrl, title))
         },
         onNavigateToSearch = {
-            navigateDebounced(Screen.Search)
+            navigateDebounced(Screen.Search())
+        },
+        onNavigateToSearchWithQuery = { query ->
+            navigateDebounced(Screen.Search(query))
         },
         onNavigateToAppearance = {
             navigateDebounced(Screen.Appearance)

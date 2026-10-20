@@ -39,6 +39,7 @@ fun MainScreen(
     onNavigateToHistory: () -> Unit,
     onNavigateToDownload: () -> Unit,
     onNavigateToSearch: () -> Unit,
+    onNavigateToSearchWithQuery: (String) -> Unit,
     onNavigateToAppearance: () -> Unit,
     onNavigateToDanmakuSettings: () -> Unit,
 ) {
@@ -77,6 +78,7 @@ fun MainScreen(
             when (page) {
                 0 -> WeekScreen(
                     onNavigateToAnimeDetail = onNavigateToAnimeDetail,
+                    onNavigateToSearchWithQuery = onNavigateToSearchWithQuery,
                     onNavigateToSearch = onNavigateToSearch,
                     onNavigateToHistory = onNavigateToHistory,
                     onNavigateToDownload = onNavigateToDownload,

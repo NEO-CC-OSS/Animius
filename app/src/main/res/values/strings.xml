@@ -61,6 +61,13 @@
 
     <!-- week  -->
     <string name="lbl_schedule">时间表</string>
+    <string name="week_metadata_loading">正在获取番剧数据…</string>
+    <string name="week_metadata_updated">番剧数据更新于 %1$s</string>
+    <string name="week_metadata_stale">番剧数据更新于 %1$s（较旧）</string>
+    <string name="week_metadata_cache">离线缓存（%1$s，较旧）</string>
+    <string name="week_metadata_cached">缓存数据（%1$s）</string>
+    <string name="week_metadata_fallback">元数据不可用，已回退到源站数据（点此重试）</string>
+    <string name="week_metadata_unavailable">元数据与源站数据都不可用，请检查网络（点此重试）</string>
     <string name="github_repo">GitHub仓库</string>
     <string name="switch_source">切换动漫源</string>
     <string name="check_update">检查更新</string>

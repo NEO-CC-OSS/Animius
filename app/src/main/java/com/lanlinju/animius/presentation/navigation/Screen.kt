@@ -12,7 +12,7 @@ sealed class Screen {
     object Main : Screen()
 
     @Serializable
-    object Search : Screen()
+    data class Search(val query: String = "") : Screen()
 
     @Serializable
     object HistoryScreen : Screen()

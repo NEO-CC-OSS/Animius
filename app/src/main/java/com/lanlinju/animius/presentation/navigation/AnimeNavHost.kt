@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.toRoute
 import com.lanlinju.animius.presentation.screen.detail.AnimeDetailScreen
 import com.lanlinju.animius.presentation.screen.download.DownloadScreen
 import com.lanlinju.animius.presentation.screen.downloaddetail.DownloadDetailScreen
@@ -29,6 +30,7 @@ fun AnimeNavHost(
     onNavigateToDownload: () -> Unit,
     onNavigateToDownloadDetail: (detailUrl: String, title: String) -> Unit,
     onNavigateToSearch: () -> Unit,
+    onNavigateToSearchWithQuery: (String) -> Unit,
     onNavigateToAppearance: () -> Unit,
     onNavigateToDanmakuSettings: () -> Unit,
     onBackClick: () -> Unit,
@@ -42,6 +44,7 @@ fun AnimeNavHost(
             MainScreen(
                 onNavigateToAnimeDetail = onNavigateToAnimeDetail,
                 onNavigateToSearch = onNavigateToSearch,
+                onNavigateToSearchWithQuery = onNavigateToSearchWithQuery,
                 onNavigateToHistory = onNavigateToHistory,
                 onNavigateToDownload = onNavigateToDownload,
                 onNavigateToAppearance = onNavigateToAppearance,
@@ -61,8 +64,10 @@ fun AnimeNavHost(
         ) {
             VideoPlayScreen(onBackClick = onBackClick)
         }
-        composable<Screen.Search> {
+        composable<Screen.Search> { entry ->
+            val route = entry.toRoute<Screen.Search>()
             SearchScreen(
+                initialQuery = route.query,
                 onNavigateToAnimeDetail = onNavigateToAnimeDetail,
                 onBackClick = onBackClick
             )

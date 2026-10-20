@@ -37,6 +37,10 @@ class SearchViewModel @Inject constructor(
     // 只在第一次进入时请求焦点
     var hasFocusRequest = false
 
+    // 周表元数据带来的初始 query 是否已消费；放在 ViewModel 里跨组合存活，
+    // 避免清空查询后旋转/从详情返回时又被重新预填（进程重建会重新创建 ViewModel，仍能恢复）
+    var initialQueryConsumed = false
+
     /**
      * 用于标识使用当前动漫源搜索数据
      *

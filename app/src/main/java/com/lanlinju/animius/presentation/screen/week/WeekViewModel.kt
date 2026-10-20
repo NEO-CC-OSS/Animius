@@ -6,31 +6,59 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.lanlinju.animius.BuildConfig
 import com.lanlinju.animius.R
+import com.lanlinju.animius.data.remote.bangumi.BangumiCalendarClient
+import com.lanlinju.animius.data.remote.bangumi.CalendarFreshness
+import com.lanlinju.animius.data.remote.bangumi.CalendarLoadResult
 import com.lanlinju.animius.domain.model.Anime
 import com.lanlinju.animius.domain.model.UpdateState
 import com.lanlinju.animius.domain.repository.AnimeRepository
 import com.lanlinju.animius.util.Resource
 import com.lanlinju.animius.util.fetchLatestRelease
 import com.lanlinju.animius.util.isNewerTvVersion
+import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.toast
 import com.lanlinju.animius.work.cancelUpdateWork
 import com.lanlinju.animius.work.enqueueUpdateWork
 import com.lanlinju.animius.work.observeUpdateWork
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.ktor.client.HttpClient
+import java.time.Instant
+import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import javax.inject.Inject
+
+/** 周表数据来自哪里，决定顶部提示与点击落点 */
+enum class WeekDataOrigin {
+    Loading,
+    Metadata,
+    MetadataCache,
+    SourceSite,
+
+    /** 元数据不可用，源站回退也失败 */
+    Unavailable,
+}
+
+data class WeekMetadataInfo(
+    val origin: WeekDataOrigin = WeekDataOrigin.Loading,
+    val updatedAt: Instant? = null,
+    val freshness: CalendarFreshness = CalendarFreshness.FRESH,
+    val failureReason: String? = null,
+)
 
 @HiltViewModel
 class WeekViewModel @Inject constructor(
     private val repository: AnimeRepository,
     private val httpClient: HttpClient,
+    private val calendarClient: BangumiCalendarClient,
 ) : ViewModel() {
     private val _weekDataMap: MutableStateFlow<Resource<Map<Int, List<Anime>>>> =
         MutableStateFlow(value = Resource.Loading)
     val weekDataMap: StateFlow<Resource<Map<Int, List<Anime>>>> get() = _weekDataMap
+
+    private val _metadataInfo: MutableStateFlow<WeekMetadataInfo> =
+        MutableStateFlow(value = WeekMetadataInfo())
+    val metadataInfo: StateFlow<WeekMetadataInfo> get() = _metadataInfo
 
     private val _isUpdateAvailable: MutableStateFlow<Boolean> = MutableStateFlow(value = false)
     val isUpdateAvailable: StateFlow<Boolean> get() = _isUpdateAvailable
@@ -50,18 +78,53 @@ class WeekViewModel @Inject constructor(
     private var updateSize: Long = 0L
 
     init {
-        getWeekData()
+        loadWeekData(forceRefresh = false)
     }
 
-    private fun getWeekData() {
+    private fun loadWeekData(forceRefresh: Boolean) {
         viewModelScope.launch {
-            _weekDataMap.value = repository.getWeekData()
+            _metadataInfo.value = WeekMetadataInfo(origin = WeekDataOrigin.Loading)
+            when (val result = calendarClient.load(forceRefresh)) {
+                is CalendarLoadResult.Success -> {
+                    _weekDataMap.value = Resource.Success(result.calendar.days)
+                    _metadataInfo.value = WeekMetadataInfo(
+                        origin = if (result.fromCache) {
+                            WeekDataOrigin.MetadataCache
+                        } else {
+                            WeekDataOrigin.Metadata
+                        },
+                        updatedAt = result.calendar.updatedAt,
+                        freshness = result.freshness,
+                        failureReason = result.failureReason,
+                    )
+                    (
+                        "META ui origin=${_metadataInfo.value.origin} " +
+                            "freshness=${result.freshness} items=${result.calendar.itemCount}"
+                    ).log("BehaviorTrace")
+                }
+
+                is CalendarLoadResult.Unavailable -> {
+                    // 元数据不可用：保留现有源站周表作为回退；源站也失败时顶部提示改为两者都不可用
+                    val sourceData = repository.getWeekData()
+                    _weekDataMap.value = sourceData
+                    _metadataInfo.value = WeekMetadataInfo(
+                        origin = if (sourceData is Resource.Error) {
+                            WeekDataOrigin.Unavailable
+                        } else {
+                            WeekDataOrigin.SourceSite
+                        },
+                        failureReason = result.reason,
+                    )
+                    "META ui origin=${_metadataInfo.value.origin} reason=${result.reason}"
+                        .log("BehaviorTrace")
+                }
+            }
         }
     }
 
     fun refresh() {
         _weekDataMap.value = Resource.Loading
-        getWeekData()
+        loadWeekData(forceRefresh = true)
     }
 
     fun checkVersionUpdate(context: Context) {

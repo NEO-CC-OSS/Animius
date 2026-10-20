@@ -1,7 +1,10 @@
 package com.lanlinju.animius.presentation.component
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.drawable.BitmapDrawable
+import android.util.Base64
+import android.util.LruCache
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.combinedClickable
@@ -18,11 +21,17 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
@@ -33,6 +42,8 @@ import androidx.compose.ui.tooling.preview.Preview
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.lanlinju.animius.util.CROSSFADE_DURATION
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.lanlinju.animius.R as Res
 
 /**
@@ -120,12 +131,21 @@ fun MediaSmall(
             .clip(RoundedCornerShape(dimensionResource(Res.dimen.media_card_corner_radius)))
         if (image.isNullOrBlank()) {
             // 无封面（如 Age动漫 周表：站点本身不提供图）→ 直接画占位底图，避免留白
-            Image(
-                painter = painterResource(Res.drawable.background),
-                contentDescription = label,
-                contentScale = ContentScale.Crop,
-                modifier = imageModifier
-            )
+            CoverPlaceholder(label = label, modifier = imageModifier)
+        } else if (image.startsWith("data:image/")) {
+            // 周表元数据的封面是内嵌 base64（Coil 2.x 不支持 data URI）；
+            // 后台解码 + 有界缓存，避免主线程解码和滚动回来重复解码
+            val bitmap = rememberDecodedCover(image)
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = label,
+                    contentScale = ContentScale.Crop,
+                    modifier = imageModifier,
+                )
+            } else {
+                CoverPlaceholder(label = label, modifier = imageModifier)
+            }
         } else {
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
@@ -177,6 +197,54 @@ fun MediaSmall(
                 )
             }
     }
+}
+
+@Composable
+private fun CoverPlaceholder(label: String?, modifier: Modifier) {
+    Image(
+        painter = painterResource(Res.drawable.background),
+        contentDescription = label,
+        contentScale = ContentScale.Crop,
+        modifier = modifier,
+    )
+}
+
+/** 有界封面缓存：320×448 RGB_565 约 280 KB/张，16 MB 约 58 张 */
+private object CoverCache : LruCache<String, Bitmap>(16 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+}
+
+@Composable
+private fun rememberDecodedCover(dataUri: String): Bitmap? {
+    val cached = remember(dataUri) { CoverCache.get(dataUri) }
+    var bitmap by remember(dataUri) { mutableStateOf(cached) }
+    LaunchedEffect(dataUri) {
+        if (cached == null) {
+            val decoded = withContext(Dispatchers.Default) { decodeBase64Image(dataUri) }
+            if (decoded != null) {
+                CoverCache.put(dataUri, decoded)
+            }
+            bitmap = decoded
+        }
+    }
+    return bitmap
+}
+
+/** 解码 "data:image/webp;base64,..."；失败返回 null，由调用方显示占位图 */
+private fun decodeBase64Image(dataUri: String): Bitmap? = try {
+    val comma = dataUri.indexOf(',')
+    if (comma <= 0) {
+        null
+    } else {
+        val bytes = Base64.decode(dataUri.substring(comma + 1), Base64.DEFAULT)
+        // 封面不透明，RGB_565 省一半内存，电视卡片上看不出差别
+        val options = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.RGB_565
+        }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+    }
+} catch (_: Exception) {
+    null
 }
 
 @Preview

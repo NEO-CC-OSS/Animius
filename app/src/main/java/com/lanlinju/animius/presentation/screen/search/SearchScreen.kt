@@ -64,7 +64,8 @@ import com.lanlinju.animius.util.isWideScreen
 @Composable
 fun SearchScreen(
     onNavigateToAnimeDetail: (detailUrl: String, mode: SourceMode) -> Unit,
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    initialQuery: String = "",
 ) {
 
     val viewModel = hiltViewModel<SearchViewModel>()
@@ -75,6 +76,18 @@ fun SearchScreen(
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     var searchBarExpanded by rememberSaveable { mutableStateOf(false) }
+    // 从周表元数据点进来时带标题预填并直接搜索；只消费一次。
+    // 标志放在 ViewModel 里：旋转/从详情返回不会重复预填；进程重建后 ViewModel 重建，仍能恢复。
+    LaunchedEffect(initialQuery) {
+        if (!viewModel.initialQueryConsumed && initialQuery.isNotBlank()) {
+            viewModel.initialQueryConsumed = true
+            if (viewModel.query.value.isBlank()) {
+                searchBarExpanded = true
+                viewModel.onQuery(initialQuery)
+                viewModel.onSearch(initialQuery, viewModel.currentSourceMode)
+            }
+        }
+    }
 
     val context = LocalContext.current
     val captchaLauncher = rememberLauncherForActivityResult(
