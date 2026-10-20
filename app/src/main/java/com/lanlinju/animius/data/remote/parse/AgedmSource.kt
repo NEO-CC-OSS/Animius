@@ -119,18 +119,12 @@ object AgedmSource : AnimeSource {
     }
 
     private suspend fun getAnimeEpisodes(elements: Elements): Map<Int, List<EpisodeBean>> {
-        val channels = mutableMapOf<Int, List<EpisodeBean>>()
-        elements.forEachIndexed { i, e ->
-            val episodes = mutableListOf<EpisodeBean>()
-            e.select("li").forEach { el ->
-                val name = el.text()
-                val url = el.select("a").attr("href")
-                episodes.add(EpisodeBean(name, url))
+        val raw = elements.map { e ->
+            e.select("li").map { el ->
+                EpisodeBean(name = el.text(), url = el.select("a").attr("href"))
             }
-            channels[i] = episodes
         }
-
-        return channels
+        return buildAgedmChannels(raw)
     }
 
     private suspend fun getVideoUrl(document: Document): String {

@@ -92,6 +92,7 @@ import com.lanlinju.animius.util.log
 import com.lanlinju.animius.presentation.component.WarningMessage
 import com.lanlinju.animius.util.KEY_HOME_BACKGROUND_URI
 import com.lanlinju.animius.util.KEY_USE_GRID_LAYOUT
+import com.lanlinju.animius.util.Resource
 import com.lanlinju.animius.util.SourceHolder
 import com.lanlinju.animius.util.SourceMode
 import com.lanlinju.animius.util.bannerParallax
@@ -124,9 +125,14 @@ fun HomeScreen(
         }
     }
 
+    val sourceState = availableDataList.value
+    // 源站首页挂了（如当前源 521）时，不要让整页报错：元数据行可用就先显示元数据
+    val metadataFallback = isTv && metadataRows.value.isNotEmpty() && sourceState is Resource.Error
+    val effectiveState = if (metadataFallback) Resource.Success(emptyList()) else sourceState
+
     Column(Modifier.fillMaxSize()) {
         StateHandler(
-            state = availableDataList.value,
+            state = effectiveState,
             onLoading = { LoadingIndicator() },
             onFailure = {
                 WarningMessage(
@@ -162,6 +168,7 @@ fun HomeScreen(
                         HomeContent(
                             data = if (isTv) metadataRows.value + data else data,
                             metadataRowCount = if (isTv) metadataRows.value.size else 0,
+                            showSourceError = metadataFallback,
                             useGridLayout = useGridLayout,
                             isWideScreen = isWideScreen,
                             homeBackgroundColor = homeBackgroundColor,
@@ -188,6 +195,7 @@ fun HomeScreen(
 private fun HomeContent(
     data: List<Home>,
     metadataRowCount: Int,
+    showSourceError: Boolean,
     useGridLayout: Boolean,
     isWideScreen: Boolean,
     homeBackgroundColor: Color,
@@ -206,6 +214,15 @@ private fun HomeContent(
                 .padding(vertical = padding),
             verticalArrangement = Arrangement.spacedBy(padding),
         ) {
+            if (showSourceError) {
+                Text(
+                    text = stringResource(Res.string.home_source_failed_metadata_only),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(start = dimensionResource(Res.dimen.large_padding))
+                )
+            }
+
             if (isWideScreen) {
                 HomeTile(
                     useGridLayout = useGridLayout,
