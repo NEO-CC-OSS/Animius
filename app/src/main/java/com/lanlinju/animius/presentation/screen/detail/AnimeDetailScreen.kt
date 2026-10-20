@@ -137,6 +137,7 @@ fun AnimeDetailScreen(
     viewModel: AnimeDetailViewModel = hiltViewModel(),
     onBackClick: () -> Unit,
     onRelatedAnimeClick: (detailUrl: String, mode: SourceMode) -> Unit,
+    onNavigateToMetadataDetail: (metadataId: Long, title: String) -> Unit,
     onNavigateToVideoPlay: (parameters: String) -> Unit,
     onNavigateToSearchWithQuery: (String) -> Unit = {},
 ) {
@@ -317,12 +318,18 @@ fun AnimeDetailScreen(
                             )
                         }
 
-                        // 元数据详情没有相关推荐（切片 3 再做）；空列表时整块隐藏，避免只剩标题
+                        // 元数据相关推荐点进同一条元数据链路；源站相关推荐保持原行为
                         if (animeDetail.relatedAnimes.isNotEmpty()) {
                             AnimeRelated(
                                 animes = animeDetail.relatedAnimes,
                                 contentPadding = PaddingValues(horizontal = dimensionResource(Res.dimen.large_padding)),
-                                onRelatedAnimeClick = { onRelatedAnimeClick(it, viewModel.mode) }
+                                onRelatedAnimeClick = {
+                                    if (it.metadataId > 0) {
+                                        onNavigateToMetadataDetail(it.metadataId, it.title)
+                                    } else {
+                                        onRelatedAnimeClick(it.detailUrl, viewModel.mode)
+                                    }
+                                }
                             )
                         }
                     }
@@ -859,7 +866,7 @@ fun AnimeRelated(
     animes: List<Anime>,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
-    onRelatedAnimeClick: (detailUrl: String) -> Unit
+    onRelatedAnimeClick: (Anime) -> Unit
 ) {
     Column(modifier) {
         Text(
@@ -878,7 +885,7 @@ fun AnimeRelated(
             MediaSmall(
                 image = anime.img,
                 label = anime.title,
-                onClick = { onRelatedAnimeClick(anime.detailUrl) },
+                onClick = { onRelatedAnimeClick(anime) },
                 modifier = Modifier.width(dimensionResource(Res.dimen.media_card_width))
             )
         }

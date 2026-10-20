@@ -6,7 +6,9 @@ import com.lanlinju.animius.data.remote.bangumi.CalendarParseException
 import java.time.Duration
 import java.time.Instant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BangumiCalendarParserTest {
@@ -23,13 +25,15 @@ class BangumiCalendarParserTest {
         tags: List<String> = emptyList(),
         totalEpisodes: Int = 0,
         aliases: List<String> = emptyList(),
+        related: List<Long> = emptyList(),
     ): String {
         val tagsJson = tags.joinToString(",") { "\"$it\"" }
         val aliasesJson = aliases.joinToString(",") { "\"$it\"" }
+        val relatedJson = related.joinToString(",")
         return """{"id":$id,"name":"$name","name_cn":"$nameCn","image":"$image",""" +
             """"air_date":"$airDate","air_weekday":1,"rank":0,""" +
             """"summary":"$summary","tags":[$tagsJson],"total_episodes":$totalEpisodes,""" +
-            """"aliases":[$aliasesJson]}"""
+            """"aliases":[$aliasesJson],"related":[$relatedJson]}"""
     }
 
     private fun days(items: Map<Int, List<String>> = emptyMap()): String =
@@ -42,8 +46,16 @@ class BangumiCalendarParserTest {
         updatedAt: String = "2026-10-19T08:00:00Z",
         days: String = days(),
         schema: Int = 1,
-    ): String =
-        """{"schema":$schema,"updated_at":"$updatedAt","source":"test","days":[$days]}"""
+        homeRows: Int? = null,
+        relatedSubjects: String? = null,
+        featured: String? = null,
+    ): String = buildString {
+        append("""{"schema":$schema,"updated_at":"$updatedAt","source":"test","days":[$days]""")
+        if (homeRows != null) append(""","home_rows":$homeRows""")
+        if (relatedSubjects != null) append(""","related_subjects":$relatedSubjects""")
+        if (featured != null) append(""","featured":$featured""")
+        append("}")
+    }
 
     @Test
     fun `parses 7 days and maps weekday 1 to index 0`() {
@@ -169,6 +181,79 @@ class BangumiCalendarParserTest {
         assertEquals(emptyList<String>(), meta.tags)
         assertEquals(0, meta.totalEpisodes)
         assertEquals(emptyList<String>(), meta.aliases)
+        assertEquals(emptyList<Long>(), meta.related.map { it.id })
+        assertTrue(parsed.featured.isEmpty())
+    }
+
+    @Test
+    fun `parses related subjects and featured items`() {
+        val raw = calendarJson(
+            days = days(
+                mapOf(
+                    1 to listOf(
+                        item(id = 1, nameCn = "本番", related = listOf(10, 2, 11, 999)),
+                        item(id = 2, nameCn = "本周番"),
+                    )
+                )
+            ),
+            relatedSubjects = """
+                {
+                  "10": {"id":10,"name":"RelatedA","name_cn":"相关A","image":"data:image/webp;base64,BB==",
+                         "summary":"简介A","tags":["TV"],"total_episodes":12},
+                  "11": {"id":11,"name":"RelatedB","name_cn":"相关B","image":"data:image/webp;base64,CC=="}
+                }
+            """.trimIndent(),
+            featured = """
+                [{"id":20,"name":"High","name_cn":"高分","image":"data:image/webp;base64,DD=="}]
+            """.trimIndent(),
+        )
+
+        val parsed = BangumiCalendarParser.parse(raw, now)
+        val meta = parsed.items.getValue(1)
+
+        // 找不到数据的 id 直接丢弃；指向周表条目的 id 必须保留（不能只认 related_subjects）
+        assertEquals(listOf(10L, 2L, 11L), meta.related.map { it.id })
+        assertEquals("相关A", meta.related.first().title)
+        assertEquals("data:image/webp;base64,BB==", meta.related.first().image)
+
+        // 相关条目也进 items，点进详情时能按 id 取到标题/简介
+        assertEquals("相关A", parsed.items.getValue(10).title)
+        assertEquals("简介A", parsed.items.getValue(10).summary)
+        assertEquals(12, parsed.items.getValue(10).totalEpisodes)
+
+        assertEquals("高分", parsed.featured.single().title)
+        assertEquals(20L, parsed.featured.single().metadataId)
+        assertEquals("高分", parsed.items.getValue(20).title)
+        assertEquals(2, parsed.itemCount)
+    }
+
+    @Test
+    fun `home rows marker is optional and defaults to off`() {
+        val old = BangumiCalendarParser.parse(
+            calendarJson(days = days(mapOf(1 to listOf(item(id = 1))))),
+            now,
+        )
+        val fresh = BangumiCalendarParser.parse(
+            calendarJson(homeRows = 1, days = days(mapOf(1 to listOf(item(id = 1))))),
+            now,
+        )
+
+        assertFalse(old.supportsHomeRows)
+        assertTrue(fresh.supportsHomeRows)
+    }
+
+    @Test
+    fun `related list excludes self and caps at six`() {
+        val raw = calendarJson(
+            days = days(mapOf(1 to listOf(item(id = 1, nameCn = "本番", related = (1L..10L).toList())))),
+            relatedSubjects = (2L..10L).joinToString(prefix = "{", postfix = "}") {
+                """"$it":{"id":$it,"name":"R$it","image":"data:image/webp;base64,AA=="}"""
+            },
+        )
+
+        val related = BangumiCalendarParser.parse(raw, now).items.getValue(1).related
+
+        assertEquals(listOf(2L, 3L, 4L, 5L, 6L, 7L), related.map { it.id })
     }
 
     @Test

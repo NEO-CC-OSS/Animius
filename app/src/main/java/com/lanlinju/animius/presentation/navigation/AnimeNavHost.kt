@@ -56,6 +56,7 @@ fun AnimeNavHost(
         composable<Screen.AnimeDetail> {
             AnimeDetailScreen(
                 onRelatedAnimeClick = onNavigateToAnimeDetail,
+                onNavigateToMetadataDetail = onNavigateToMetadataDetail,
                 onNavigateToVideoPlay = onNavigateToVideoPlay,
                 onNavigateToSearchWithQuery = onNavigateToSearchWithQuery,
                 onBackClick = onBackClick

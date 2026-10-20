@@ -10,6 +10,17 @@ data class BangumiCalendar(
     val itemCount: Int,
     /* 按 Bangumi subject id 索引的详情字段（切片 2）；旧 JSON 没有摘要时为默认值 */
     val items: Map<Long, MetadataItem> = emptyMap(),
+    /* 首页「高分推荐」行（切片 3）；旧 JSON 为空 */
+    val featured: List<Anime> = emptyList(),
+    /* 生成物是否带切片 3 的首页/相关推荐数据；旧缓存为 false，首页不显示元数据行 */
+    val supportsHomeRows: Boolean = false,
+)
+
+/** 相关推荐条目：只保留详情页卡片需要的字段 */
+data class MetadataRelated(
+    val id: Long,
+    val title: String,
+    val image: String,
 )
 
 /** 元数据条目的详情字段：周表卡片只需要标题/封面，详情页再取简介/标签 */
@@ -23,6 +34,8 @@ data class MetadataItem(
     val totalEpisodes: Int,
     /** Bangumi 别名（如「海贼王」）；用于搜索与候选校验 */
     val aliases: List<String> = emptyList(),
+    /** Bangumi 相关条目（切片 3）；为空时详情页回退源站相关推荐 */
+    val related: List<MetadataRelated> = emptyList(),
 )
 
 enum class CalendarFreshness {

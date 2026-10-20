@@ -2,6 +2,7 @@ package com.lanlinju.animius.bangumi
 
 import com.lanlinju.animius.data.remote.bangumi.MetadataDetailMerger
 import com.lanlinju.animius.data.remote.bangumi.MetadataItem
+import com.lanlinju.animius.data.remote.bangumi.MetadataRelated
 import com.lanlinju.animius.domain.model.Anime
 import com.lanlinju.animius.domain.model.AnimeDetail
 import com.lanlinju.animius.domain.model.Episode
@@ -43,7 +44,33 @@ class MetadataDetailMergerTest {
         assertEquals(sourceDetail.episodes, merged.episodes)
         assertEquals(sourceDetail.channels, merged.channels)
         assertEquals(2, merged.lastPosition)
-        assertTrue(merged.relatedAnimes.isEmpty())
+        // 元数据没有相关条目时保留源站相关推荐，避免整块空白
+        assertEquals(sourceDetail.relatedAnimes, merged.relatedAnimes)
+    }
+
+    @Test
+    fun `metadata related replaces source related`() {
+        val relatedMeta = meta.copy(
+            related = listOf(
+                MetadataRelated(
+                    id = 200,
+                    title = "续作",
+                    image = "data:image/webp;base64,BB==",
+                ),
+                MetadataRelated(
+                    id = 201,
+                    title = "前作",
+                    image = "data:image/webp;base64,CC==",
+                ),
+            )
+        )
+
+        val merged = MetadataDetailMerger.merge(sourceDetail, relatedMeta)
+
+        assertEquals(listOf("续作", "前作"), merged.relatedAnimes.map { it.title })
+        assertEquals(listOf(200L, 201L), merged.relatedAnimes.map { it.metadataId })
+        assertTrue(merged.relatedAnimes.all { it.detailUrl.isEmpty() })
+        assertEquals("data:image/webp;base64,BB==", merged.relatedAnimes.first().img)
     }
 
     @Test
@@ -59,13 +86,13 @@ class MetadataDetailMergerTest {
     }
 
     @Test
-    fun `null metadata only clears related recommendations`() {
+    fun `null metadata keeps source related recommendations`() {
         val merged = MetadataDetailMerger.merge(sourceDetail, null)
 
         assertEquals(sourceDetail.title, merged.title)
         assertEquals(sourceDetail.desc, merged.desc)
         assertEquals(sourceDetail.tags, merged.tags)
-        assertTrue(merged.relatedAnimes.isEmpty())
+        assertEquals(sourceDetail.relatedAnimes, merged.relatedAnimes)
     }
 
     @Test

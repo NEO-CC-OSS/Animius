@@ -88,7 +88,7 @@ fun MainScreen(
                     onNavigateToDanmakuSettings = onNavigateToDanmakuSettings
                 )
 
-                1 -> HomeScreen(onNavigateToAnimeDetail)
+                1 -> HomeScreen(onNavigateToAnimeDetail, onNavigateToMetadataDetail)
                 2 -> FavouriteScreen(onNavigateToAnimeDetail)
             }
         }

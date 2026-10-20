@@ -18,7 +18,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Fetch Bangumi calendar
@@ -51,6 +51,7 @@ jobs:
                .images.small // .images.grid // "");
             {
               schema: 1,
+              home_rows: 1,
               updated_at: $updated_at,
               source: "https://api.bgm.tv/calendar",
               days: [
@@ -77,33 +78,45 @@ jobs:
           echo "compact bytes: $(wc -c < calendar.json)"
           jq -c '{updated_at, days: [.days[] | {weekday, count: (.items|length)}]}' calendar.json
 
-      - name: Fetch subject summaries
+      - name: Fetch subject summaries and relations
         run: |
           set -euo pipefail
           UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius)"
-          mkdir -p subjects
+          mkdir -p subjects relations
           ok=0
           fail=0
-          # 切片 2：详情页需要简介/标签。逐条取 /v0/subjects/{id}，串行 + 0.3s 间隔；
-          # 单条失败留空，不让整轮日历生成失败。总预算 10 分钟。
-          deadline=$((SECONDS + 600))
+          rel_ok=0
+          rel_fail=0
+          # 切片 2：详情页需要简介/标签；切片 3：相关推荐需要 /subjects/{id}/subjects。
+          # 逐条串行 + 0.3s 间隔；单条失败留空，不让整轮日历生成失败。总预算 12 分钟。
+          deadline=$((SECONDS + 720))
           while read -r id; do
             [ -n "$id" ] || continue
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "subject fetch stopped early (elapsed=${SECONDS}s)"
+              echo "subject/relation fetch stopped early (elapsed=${SECONDS}s)"
               break
             fi
             if curl -fsSL --retry 2 --retry-delay 2 --max-time 15 -A "$UA" \
-                -o "subjects/${id}.json" "https://api.bgm.tv/v0/subjects/${id}"; then
+                -o "subjects/${id}.json" "https://api.bgm.tv/v0/subjects/${id}" \
+               && jq -e 'type == "object" and (.id // 0) > 0' "subjects/${id}.json" > /dev/null; then
               ok=$((ok+1))
             else
               echo "subject failed: id=$id"
               rm -f "subjects/${id}.json"
               fail=$((fail+1))
             fi
+            if curl -fsSL --retry 2 --retry-delay 2 --max-time 15 -A "$UA" \
+                -o "relations/${id}.json" "https://api.bgm.tv/v0/subjects/${id}/subjects" \
+               && jq -e 'type == "array"' "relations/${id}.json" > /dev/null; then
+              rel_ok=$((rel_ok+1))
+            else
+              echo "relation failed: id=$id"
+              rm -f "relations/${id}.json"
+              rel_fail=$((rel_fail+1))
+            fi
             sleep 0.3
           done < <(jq -r '[.days[].items[].id] | unique[]' calendar.json)
-          echo "subjects ok=$ok fail=$fail"
+          echo "subjects ok=$ok fail=$fail; relations ok=$rel_ok fail=$rel_fail"
           # 详情合并是增强项：任何一步失败都保留原日历继续发布，不让整轮数据变红
           if compgen -G "subjects/*.json" > /dev/null; then
             if jq -s '
@@ -153,10 +166,189 @@ jobs:
               rm -f calendar.with-details.json
             fi
           fi
+          # 相关条目只保留动画（type=2）、排除自身、按接口顺序去重；这里先留 20 个候选，
+          # 等详情抓取完成、过滤 NSFW 后再在合并步骤截到 6 个。
+          if compgen -G "relations/*.json" > /dev/null; then
+            mkdir -p relation_agg
+            : > relation_agg.jsonl
+            for f in relations/*.json; do
+              id="$(basename "$f" .json)"
+              if jq --arg id "$id" '
+                [.[] | select(.type == 2) | select((.id | tostring) != $id) | .id]
+                | reduce .[] as $rid ([]; if any(.[]; . == $rid) then . else . + [$rid] end)
+                | .[0:20]
+                | {($id): .}
+              ' "$f" > relation_agg/one.json; then
+                cat relation_agg/one.json >> relation_agg.jsonl
+              else
+                echo "relation parse failed: $f"
+              fi
+            done
+            jq -s 'add // {}' relation_agg.jsonl > relations.json
+          else
+            echo '{}' > relations.json
+          fi
+          echo "relations: $(jq '[.[] | length] | add // 0' relations.json) refs / $(jq 'keys | length' relations.json) subjects"
           echo "calendar with details bytes: $(wc -c < calendar.json)"
           echo "items with summary: $(jq '[.days[].items[] | select((.summary // "") != "")] | length' calendar.json)"
           echo "items with aliases: $(jq '[.days[].items[] | select((.aliases // []) | length > 0)] | length' calendar.json)"
           jq -e '(.schema == 1) and (.days | length == 7)' calendar.json
+
+      - name: Fetch related subject details
+        run: |
+          set -euo pipefail
+          UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius)"
+          mkdir -p related_details
+          # 只取不在本周表里的相关条目（周表条目已有详情），按被引用次数从高到低取 200 个；
+          # 预算 4 分钟。这些详情用于过滤 NSFW、补简介/标签/别名，让相关推荐点进详情不是空白页。
+          jq -r --slurpfile cal calendar.json '
+            ([$cal[0].days[].items[].id | tostring] | unique) as $calIds
+            | (reduce ([.[] | .[]][]) as $rid ({}; .[($rid | tostring)] += 1)) as $counts
+            | $counts | to_entries
+            | map(select(.key as $k | ($calIds | index($k)) == null))
+            | sort_by(-.value)
+            | .[0:200]
+            | .[].key
+          ' relations.json > related_ids.txt
+          total=$(wc -l < related_ids.txt)
+          echo "related-only ids: $total"
+          ok=0
+          fail=0
+          deadline=$((SECONDS + 240))
+          while read -r id; do
+            [ -n "$id" ] || continue
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "related detail fetch stopped early (elapsed=${SECONDS}s)"
+              break
+            fi
+            if curl -fsSL --retry 2 --retry-delay 2 --max-time 15 -A "$UA" \
+                -o "related_details/${id}.json" "https://api.bgm.tv/v0/subjects/${id}" \
+               && jq -e 'type == "object" and (.id // 0) > 0' "related_details/${id}.json" > /dev/null; then
+              ok=$((ok+1))
+            else
+              echo "related detail failed: id=$id"
+              rm -f "related_details/${id}.json"
+              fail=$((fail+1))
+            fi
+            sleep 0.3
+          done < related_ids.txt
+          echo "related details ok=$ok fail=$fail"
+          if compgen -G "related_details/*.json" > /dev/null; then
+            jq -s '
+              map(select(.type == 2 and (.nsfw // false) == false) | {
+                key: (.id | tostring),
+                value: {
+                  id,
+                  name: (.name // ""),
+                  name_cn: (.name_cn // ""),
+                  image: (.images.large // .images.common // .images.medium //
+                          .images.small // .images.grid // ""),
+                  summary: ((.summary // "") | .[0:200]),
+                  tags: [((.tags // [])[] | .name)][0:10],
+                  total_episodes: (.total_episodes // 0),
+                  aliases: (
+                    [
+                      ((.infobox // [])[]
+                        | select(.key == "别名" or .key == "中文名"
+                                 or .key == "英文名" or .key == "日文名")
+                        | .value
+                        | if type == "array"
+                          then (.[] | if type == "object" then (.v // .k // empty) else . end)
+                          elif type == "string" then .
+                          else empty end
+                      )
+                    ]
+                    | map(select(type == "string"))
+                    | map(gsub("^[[:space:]]+|[[:space:]]+$"; ""))
+                    | map(select(length > 0))
+                    | unique
+                    | .[0:8]
+                  )
+                }
+              }) | from_entries
+            ' related_details/*.json > related_subjects.json
+          else
+            echo '{}' > related_subjects.json
+          fi
+          echo "related subjects: $(jq 'keys | length' related_subjects.json)"
+
+      - name: Fetch featured subjects
+        run: |
+          set -euo pipefail
+          UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius)"
+          # 首页「高分推荐」：Bangumi 评分排名前 30 的动画（不含 NSFW）
+          if curl -fsSL --retry 2 --retry-delay 3 --max-time 20 -A "$UA" \
+              -o featured_raw.json \
+              "https://api.bgm.tv/v0/subjects?type=2&sort=rank&limit=30&offset=0" \
+             && jq -e '.data | type == "array"' featured_raw.json > /dev/null; then
+            jq '
+              [.data[]?
+               | select(.type == 2 and (.nsfw // false) == false)
+               | {
+                   id,
+                   name: (.name // ""),
+                   name_cn: (.name_cn // ""),
+                   image: (.images.large // .images.common // .images.medium //
+                           .images.small // .images.grid // ""),
+                   summary: ((.summary // "") | .[0:200]),
+                   tags: [((.tags // [])[] | .name)][0:10],
+                   total_episodes: (.total_episodes // 0),
+                   aliases: (
+                     [
+                       ((.infobox // [])[]
+                         | select(.key == "别名" or .key == "中文名"
+                                  or .key == "英文名" or .key == "日文名")
+                         | .value
+                         | if type == "array"
+                           then (.[] | if type == "object" then (.v // .k // empty) else . end)
+                           elif type == "string" then .
+                           else empty end
+                       )
+                     ]
+                     | map(select(type == "string"))
+                     | map(gsub("^[[:space:]]+|[[:space:]]+$"; ""))
+                     | map(select(length > 0))
+                     | unique
+                     | .[0:8]
+                   )
+                 }
+              ]
+            ' featured_raw.json > featured.json
+          else
+            echo "featured fetch failed; keep featured empty"
+            echo '[]' > featured.json
+          fi
+          echo "featured: $(jq 'length' featured.json)"
+
+      - name: Merge related and featured
+        run: |
+          set -euo pipefail
+          jq --slurpfile related relations.json \
+             --slurpfile related_subjects related_subjects.json \
+             --slurpfile featured featured.json '
+            . as $root
+            | ([ $root.days[].items[],
+                 (($related_subjects[0] // {}) | .[]),
+                 ($featured[0] // [])[] ]
+               | map({key: (.id | tostring), value: true})
+               | from_entries) as $known
+            | .days |= map(.items |= map(
+                . as $item
+                | $item + {
+                    related: [
+                      (($related[0][($item.id | tostring)] // [])[] as $rid
+                       | select($known[($rid | tostring)] != null)
+                       | $rid)
+                    ][0:6]
+                  }
+              ))
+            | .related_subjects = ($related_subjects[0] // {})
+            | .featured = ($featured[0] // [])
+          ' calendar.json > calendar.with-related.json
+          mv calendar.with-related.json calendar.json
+          jq -e '(.schema == 1) and (.days | length == 7)' calendar.json
+          echo "calendar with related/featured bytes: $(wc -c < calendar.json)"
+          echo "items with related: $(jq '[.days[].items[] | select((.related // []) | length > 0)] | length' calendar.json)"
 
       - name: Install Pillow
         run: python3 -m pip install --user --quiet pillow
@@ -171,8 +363,8 @@ jobs:
           import sys
           from PIL import Image
           src, dst = sys.argv[1], sys.argv[2]
+          w, h, quality = int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
           img = Image.open(src).convert("RGB")
-          w, h = 480, 672
           scale = max(w / img.width, h / img.height)
           img = img.resize(
               (max(1, round(img.width * scale)), max(1, round(img.height * scale))),
@@ -181,40 +373,52 @@ jobs:
           left = (img.width - w) // 2
           top = (img.height - h) // 2
           img = img.crop((left, top, left + w, top + h))
-          img.save(dst, "WEBP", quality=70, method=6)
+          img.save(dst, "WEBP", quality=quality, method=6)
           PY
           ok=0
           fail=0
-          consecutive_fail=0
-          # 封面下载预算：最多 10 分钟或连续 10 次失败就停，剩余条目保留原 URL，
-          # 保证 workflow 不会因为 CDN 不可达而拖到 30 分钟 job 超时
-          deadline=$((SECONDS + 600))
-          while IFS=$'\t' read -r id url; do
-            if [ "$SECONDS" -ge "$deadline" ] || [ "$consecutive_fail" -ge 10 ]; then
-              echo "cover fetch stopped early (elapsed=${SECONDS}s failures=$consecutive_fail)"
-              break
-            fi
-            [ -n "$url" ] || continue
-            case "$url" in
-              http://*|https://*) ;;
-              *) continue ;;
-            esac
-            src="covers/${id}.src"
-            out="covers/${id}.webp"
-            if curl -fsSL --retry 1 --retry-delay 1 --max-time 12 -A "$UA" -o "$src" "$url" \
-               && python3 resize_cover.py "$src" "$out"; then
-              b64="$(base64 -w0 "$out")"
-              jq -n --arg id "$id" --arg data "data:image/webp;base64,$b64" \
-                '{($id): $data}' >> covers.jsonl
-              ok=$((ok+1))
-              consecutive_fail=0
-            else
-              echo "cover failed: id=$id url=$url"
-              fail=$((fail+1))
-              consecutive_fail=$((consecutive_fail+1))
-            fi
-            rm -f "$src"
-          done < <(jq -r '.days[].items[] | [.id, .image] | @tsv' calendar.json)
+          # 周表封面（480×672）与相关/高分封面（240×336）分两组预算，
+          # 避免周表封面慢时把相关/高分封面饿死；周表失败保留原 URL，相关/高分失败会被丢弃。
+          jq -r '.days[].items[] | [.id, .image, 480, 672, 70] | @tsv' calendar.json > cover_calendar.tsv
+          {
+            jq -r '.related_subjects | to_entries[] | [.value.id, .value.image, 240, 336, 60] | @tsv' calendar.json
+            jq -r '.featured[]? | [.id, .image, 240, 336, 60] | @tsv' calendar.json
+          } | awk -F'\t' '!seen[$1]++' > cover_extra.tsv
+          fetch_covers() {
+            local jobs="$1"
+            local budget="$2"
+            local deadline=$((SECONDS + budget))
+            local consecutive=0
+            while IFS=$'\t' read -r id url w h q; do
+              if [ "$SECONDS" -ge "$deadline" ] || [ "$consecutive" -ge 10 ]; then
+                echo "cover fetch stopped early: $jobs (elapsed=${SECONDS}s failures=$consecutive)"
+                break
+              fi
+              [ -n "$url" ] || continue
+              case "$url" in
+                http://*|https://*) ;;
+                *) continue ;;
+              esac
+              src="covers/${id}.src"
+              out="covers/${id}.webp"
+              if curl -fsSL --retry 1 --retry-delay 1 --max-time 12 -A "$UA" -o "$src" "$url" \
+                 && python3 resize_cover.py "$src" "$out" "$w" "$h" "$q"; then
+                b64="$(base64 -w0 "$out")"
+                jq -n --arg id "$id" --arg data "data:image/webp;base64,$b64" \
+                  '{($id): $data}' >> covers.jsonl
+                ok=$((ok+1))
+                consecutive=0
+              else
+                echo "cover failed: id=$id url=$url"
+                fail=$((fail+1))
+                consecutive=$((consecutive+1))
+              fi
+              rm -f "$src"
+            done < "$jobs"
+          }
+          echo "cover jobs: calendar=$(wc -l < cover_calendar.tsv) extra=$(wc -l < cover_extra.tsv)"
+          fetch_covers cover_calendar.tsv 600
+          fetch_covers cover_extra.tsv 300
           echo "covers ok=$ok fail=$fail"
           if [ -s covers.jsonl ]; then
             jq -s 'add' covers.jsonl > covers.json
@@ -222,12 +426,102 @@ jobs:
               .days |= map(.items |= map(
                 .image = ($covers[0][(.id|tostring)] // .image)
               ))
+              | .related_subjects |= with_entries(
+                  .value.image = ($covers[0][(.value.id|tostring)] // .value.image)
+                )
+              | .featured |= map(
+                  .image = ($covers[0][(.id|tostring)] // .image)
+                )
             ' calendar.json > calendar.with-covers.json
             mv calendar.with-covers.json calendar.json
           fi
+          # 相关/高分条目在电视上不能回源加载封面：目标没有内嵌封面（周表/相关/高分任一来源）
+          # 的直接丢弃，避免空白卡片；周表条目封面失败仍保留原 URL（与切片 1 一致）。
+          jq '
+            . as $root
+            | ([ $root.days[].items[],
+                 (($root.related_subjects // {}) | .[]),
+                 ($root.featured // [])[] ]
+               | map(select(.image | startswith("data:image/")))
+               | map({key: (.id | tostring), value: true})
+               | from_entries) as $withCover
+            | .related_subjects |= with_entries(select(.value.image | startswith("data:image/")))
+            | .featured |= map(select(.image | startswith("data:image/")))
+            | .days |= map(.items |= map(
+                .related = [.related[]? as $rid | select($withCover[($rid | tostring)] == true) | $rid]
+              ))
+          ' calendar.json > calendar.filtered.json
+          mv calendar.filtered.json calendar.json
           echo "calendar with covers bytes: $(wc -c < calendar.json)"
           echo "embedded covers: $(jq '[.days[].items[] | select(.image | startswith("data:image/"))] | length' calendar.json)"
+          echo "related subjects with cover: $(jq '[.related_subjects[] | select(.image | startswith("data:image/"))] | length' calendar.json)"
+          echo "featured with cover: $(jq '[.featured[] | select(.image | startswith("data:image/"))] | length' calendar.json)"
           jq -e '(.schema == 1) and (.days | length == 7)' calendar.json
+
+      - name: Trim metadata to size budget
+        run: |
+          set -euo pipefail
+          cat > trim_metadata.py <<'PY'
+          import json
+          import sys
+
+          path = sys.argv[1]
+          limit = int(sys.argv[2])
+
+          with open(path, encoding="utf-8") as f:
+              data = json.load(f)
+
+
+          def encoded_size():
+              return len(
+                  json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+              )
+
+
+          def references():
+              refs = {}
+              for day in data.get("days", []):
+                  for item in day.get("items", []):
+                      for rid in item.get("related", []):
+                          key = str(rid)
+                          refs[key] = refs.get(key, 0) + 1
+              return refs
+
+
+          # 体积超限时从「仅相关条目」开始丢，周表 7 天数据绝不裁剪
+          while encoded_size() > limit:
+              refs = references()
+              related = data.get("related_subjects", {})
+              orphans = [key for key in related if key not in refs]
+              if orphans:
+                  for key in orphans:
+                      related.pop(key, None)
+                  continue
+              if refs:
+                  victims = [key for key in refs if key in related]
+                  if victims:
+                      victim = min(victims, key=lambda key: (refs[key], -int(key)))
+                      related.pop(victim, None)
+                      for day in data.get("days", []):
+                          for item in day.get("items", []):
+                              item["related"] = [
+                                  rid for rid in item.get("related", []) if str(rid) != victim
+                              ]
+                      continue
+              if data.get("featured"):
+                  data["featured"].pop()
+                  continue
+              break
+
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+
+          print(f"final bytes: {encoded_size()} (limit {limit})")
+          PY
+          python3 trim_metadata.py calendar.json 9000000
+          jq -e '(.schema == 1) and (.days | length == 7)' calendar.json
+          echo "related subjects: $(jq '.related_subjects | length' calendar.json)"
+          echo "featured: $(jq '.featured | length' calendar.json)"
 
       - name: Upload JSON artifacts
         uses: actions/upload-artifact@v4
@@ -237,6 +531,9 @@ jobs:
             raw_calendar.json
             calendar.urls.json
             calendar.json
+            relations.json
+            related_subjects.json
+            featured.json
           retention-days: 7
 
       - name: Publish calendar.json to metadata branch

@@ -45,8 +45,8 @@ class BangumiCalendarClient @Inject constructor(
         private const val DIRECT_CONNECT_TIMEOUT_MS = 6_000L
         private const val DIRECT_SOCKET_TIMEOUT_MS = 10_000L
 
-        /** 整轮网络尝试（直连 + 两个镜像）的总上限；镜像继承的全局 300s 太长 */
-        private const val NETWORK_TIMEOUT_MS = 30_000L
+        /** 整轮网络尝试（直连 + 两个镜像）的总上限；切片 3 日历约 9 MB，30s 在慢网会误判超时 */
+        private const val NETWORK_TIMEOUT_MS = 60_000L
 
         /** 直连优先，其次镜像加速（任一成功即可） */
         internal fun metadataUrlCandidates(): List<String> = buildList {
@@ -97,6 +97,22 @@ class BangumiCalendarClient @Inject constructor(
         now: Instant = Instant.now(),
     ): CalendarLoadResult = withContext(Dispatchers.IO) {
         "META load start force=$forceRefresh".log("BehaviorTrace")
+
+        // 进程内已有一份新鲜周表（周表页先加载过）时直接复用，避免首页再解析一次大 JSON
+        if (!forceRefresh) {
+            val memory = lastCalendar
+            if (memory != null &&
+                BangumiCalendarParser.freshness(memory.updatedAt, now) == CalendarFreshness.FRESH
+            ) {
+                "META load ok origin=memory freshness=FRESH items=${memory.itemCount}"
+                    .log("BehaviorTrace")
+                return@withContext CalendarLoadResult.Success(
+                    calendar = memory,
+                    fromCache = true,
+                    freshness = CalendarFreshness.FRESH,
+                )
+            }
+        }
 
         val cached = readCache(now)
         if (!forceRefresh && cached != null && cached.freshness == CalendarFreshness.FRESH) {

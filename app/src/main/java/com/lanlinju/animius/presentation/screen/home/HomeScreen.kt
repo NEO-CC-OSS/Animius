@@ -50,6 +50,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -94,6 +95,7 @@ import com.lanlinju.animius.util.KEY_USE_GRID_LAYOUT
 import com.lanlinju.animius.util.SourceHolder
 import com.lanlinju.animius.util.SourceMode
 import com.lanlinju.animius.util.bannerParallax
+import com.lanlinju.animius.util.isAndroidTV
 import com.lanlinju.animius.util.isWideScreen
 import com.lanlinju.animius.util.rememberPreference
 import kotlinx.coroutines.delay
@@ -104,9 +106,16 @@ import com.lanlinju.animius.R as Res
 @Composable
 fun HomeScreen(
     onNavigateToAnimeDetail: (detailUrl: String, mode: SourceMode) -> Unit,
+    onNavigateToMetadataDetail: (metadataId: Long, title: String) -> Unit = { _, _ -> },
 ) {
     val homeViewModel = hiltViewModel<HomeViewModel>()
     val availableDataList = homeViewModel.homeDataList.collectAsState()
+    val metadataRows = homeViewModel.metadataRows.collectAsState()
+    val isTv = isAndroidTV(LocalContext.current)
+
+    LaunchedEffect(isTv) {
+        if (isTv) homeViewModel.loadMetadataRows()
+    }
 
     LaunchedEffect(SourceHolder.isSourceChanged) {
         if (SourceHolder.isSourceChanged) {
@@ -151,16 +160,21 @@ fun HomeScreen(
 
                     resource.data?.let { data ->
                         HomeContent(
-                            data = data,
+                            data = if (isTv) metadataRows.value + data else data,
+                            metadataRowCount = if (isTv) metadataRows.value.size else 0,
                             useGridLayout = useGridLayout,
                             isWideScreen = isWideScreen,
                             homeBackgroundColor = homeBackgroundColor,
                             onSwitchGridLayout = { useGridLayout = it },
-                            onItemClick = {
-                                onNavigateToAnimeDetail(
-                                    it.detailUrl,
-                                    SourceHolder.currentSourceMode
-                                )
+                            onItemClick = { anime ->
+                                if (anime.metadataId > 0) {
+                                    onNavigateToMetadataDetail(anime.metadataId, anime.title)
+                                } else {
+                                    onNavigateToAnimeDetail(
+                                        anime.detailUrl,
+                                        SourceHolder.currentSourceMode
+                                    )
+                                }
                             }
                         )
                     }
@@ -173,6 +187,7 @@ fun HomeScreen(
 @Composable
 private fun HomeContent(
     data: List<Home>,
+    metadataRowCount: Int,
     useGridLayout: Boolean,
     isWideScreen: Boolean,
     homeBackgroundColor: Color,
@@ -216,7 +231,7 @@ private fun HomeContent(
                     val requester = itemRequesters[row * 100000L + item]
                     "home-default row=$row item=$item mapSize=${itemRequesters.size} requester=${requester != null}"
                         .log("FocusRestore")
-                    if (row > 0 || item > 0) { // (0,0) 是默认落点附近，无需干预
+                    if (row >= 0 && item >= 0) { // -1 表示还没聚焦过；0/0 现在是「今日放送」第一张卡
                         requester?.let {
                             runCatching { it.requestFocus() }
                                 .onFailure { e -> "home-default requestFocus失败: $e".log("FocusRestore") }
@@ -224,11 +239,12 @@ private fun HomeContent(
                         }
                     }
                 }
-                data.forEachIndexed { rowIndex, home ->
+                data.forEachIndexed { index, home ->
                     HomeRow(
                         list = home.animeList,
                         title = home.title,
-                        rowIndex = rowIndex,
+                        // 元数据行用 0..2，源站行从 100 开始：元数据行异步插入后行号仍然稳定
+                        rowIndex = if (index < metadataRowCount) index else 100 + (index - metadataRowCount),
                         lastFocusedRow = lastFocusedRow,
                         lastFocusedItem = lastFocusedItem,
                         itemRequesters = itemRequesters,
@@ -249,13 +265,30 @@ private fun GridLayoutTabs(
 ) {
     val pagerState = rememberPagerState(pageCount = { data.size })
     val scope = rememberCoroutineScope()
+    val tabs = remember(data) { data.map { it.title } }
+    // 元数据行异步插入会让页签整体后移：按标题记住当前页，插入后回到同一页而不是错位
+    var selectedTitle by rememberSaveable { mutableStateOf("") }
+    var previousSize by remember { mutableIntStateOf(data.size) }
+    LaunchedEffect(pagerState.currentPage) {
+        if (data.size == previousSize) {
+            data.getOrNull(pagerState.currentPage)?.let { selectedTitle = it.title }
+        }
+    }
+    LaunchedEffect(data.size) {
+        if (data.size != previousSize) {
+            val target = data.indexOfFirst { it.title == selectedTitle }
+            previousSize = data.size
+            if (target >= 0 && target != pagerState.currentPage) {
+                pagerState.scrollToPage(target)
+            }
+        }
+    }
     PrimaryScrollableTabRow(
         selectedTabIndex = pagerState.currentPage,
         containerColor = Color.Unspecified,
         edgePadding = 0.dp,
         divider = { HorizontalDivider(thickness = 0.5.dp) }
     ) {
-        val tabs = remember(data) { data.map { it.title } }
         tabs.forEachIndexed { index, title ->
             Tab(
                 text = { title },
@@ -292,7 +325,7 @@ private fun GridLayoutTabs(
             val requester = itemRequesters[saved]
             "home-grid page=$page saved=$saved mapSize=${itemRequesters.size} requester=${requester != null}"
                 .log("FocusRestore")
-            if (saved > 0) { // index 0 是默认落点附近，无需干预
+            if (saved >= 0) { // -1 表示还没聚焦过；0 现在是有效卡片
                 requester?.let {
                     runCatching { it.requestFocus() }
                         .onFailure { e -> "home-grid requestFocus失败: $e".log("FocusRestore") }

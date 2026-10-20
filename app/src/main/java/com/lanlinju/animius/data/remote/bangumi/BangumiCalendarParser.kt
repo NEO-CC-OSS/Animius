@@ -16,6 +16,7 @@ object BangumiCalendarParser {
 
     private const val FRESH_WINDOW_HOURS = 24L
     private const val MAX_USABLE_DAYS = 7L
+    private const val MAX_RELATED = 6
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -50,37 +51,52 @@ object BangumiCalendarParser {
             throw CalendarParseException("weekday 非法: $weekdays")
         }
 
+        val calendarDtos = dto.days.asSequence()
+            .flatMap { it.items.asSequence() }
+            .filter { it.id > 0 }
+            .associateBy { it.id }
+
+        val calendarItems = calendarDtos.values.mapNotNull { it.toMetadataItem() }.associateBy { it.id }
+        val relatedItems = dto.relatedSubjects.values.mapNotNull { it.toMetadataItem() }.associateBy { it.id }
+        val featuredItems = dto.featured.mapNotNull { it.toMetadataItem() }.associateBy { it.id }
+
+        // 周表条目优先；相关/高分条目只补缺，保证点进详情时能按 id 取到标题/封面/简介。
+        // 相关条目来自单条详情（带 infobox/别名），比高分列表更完整，放在 featured 之后覆盖。
+        val allItems = buildMap {
+            putAll(featuredItems)
+            putAll(relatedItems)
+            putAll(calendarItems)
+        }
+
+        val items = buildMap {
+            putAll(allItems)
+            // 周表条目带上相关推荐；找不到数据的 id 直接丢弃，避免出现空白卡片
+            calendarItems.forEach { (id, item) ->
+                val related = calendarDtos[id]?.related.orEmpty()
+                    .asSequence()
+                    .filter { it != id }
+                    .mapNotNull { relatedId ->
+                        allItems[relatedId]?.let { MetadataRelated(it.id, it.title, it.image) }
+                    }
+                    .distinctBy { it.id }
+                    .take(MAX_RELATED)
+                    .toList()
+                put(id, item.copy(related = related))
+            }
+        }
+
         val days = dto.days.associate { day ->
             val index = day.weekday - 1
             index to day.items.mapNotNull { it.toAnime() }
         }
-
-        // 详情页按 id 取简介/标签；同一条目重复出现时后写覆盖前写即可
-        val items = dto.days.asSequence()
-            .flatMap { it.items.asSequence() }
-            .filter { it.id > 0 }
-            .associate { item ->
-                item.id to MetadataItem(
-                    id = item.id,
-                    title = item.nameCn.ifBlank { item.name }.trim(),
-                    originalTitle = item.name.trim(),
-                    image = item.image,
-                    summary = item.summary.trim(),
-                    tags = item.tags.map { it.trim() }.filter { it.isNotEmpty() }.take(10),
-                    totalEpisodes = item.totalEpisodes,
-                    aliases = item.aliases
-                        .map { it.trim() }
-                        .filter { it.isNotEmpty() }
-                        .distinct()
-                        .take(8),
-                )
-            }
 
         return BangumiCalendar(
             updatedAt = updatedAt,
             days = days,
             itemCount = days.values.sumOf { it.size },
             items = items,
+            featured = dto.featured.mapNotNull { it.toAnime() }.filter { it.metadataId > 0 },
+            supportsHomeRows = dto.homeRows >= 1,
         )
     }
 
@@ -96,6 +112,21 @@ object BangumiCalendarParser {
             age <= Duration.ofDays(MAX_USABLE_DAYS) -> CalendarFreshness.STALE
             else -> CalendarFreshness.EXPIRED
         }
+    }
+
+    private fun BangumiItemDto.toMetadataItem(): MetadataItem? {
+        val title = nameCn.ifBlank { name }.trim()
+        if (id <= 0 || title.isEmpty()) return null
+        return MetadataItem(
+            id = id,
+            title = title,
+            originalTitle = name.trim(),
+            image = image,
+            summary = summary.trim(),
+            tags = tags.map { it.trim() }.filter { it.isNotEmpty() }.take(10),
+            totalEpisodes = totalEpisodes,
+            aliases = aliases.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(8),
+        )
     }
 
     private fun BangumiItemDto.toAnime(): Anime? {
