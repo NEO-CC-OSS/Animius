@@ -1,8 +1,17 @@
 name: Metadata Calendar
 
-# 每天在 GitHub runner 上抓一次 Bangumi 日历，生成精简 JSON 推到 metadata 分支。
-# 封面 CDN 在部分网络不可达，因此把封面缩成一小组 WebP 直接嵌进 JSON（data URI），
-# App 只需要下载这一个文件，走的仍是已验证的 GitHub 直连/镜像通道。
+# 每天在 GitHub runner 上抓一次 Bangumi 日历，产出三份数据到 metadata 分支：
+#   index.json        轻包（schema 2，硬上限 250 KB）：周表 7 天 + 首页三行所需字段 +
+#                     相关推荐关系 + 高分推荐（纯文字），外加每张封面的相对路径
+#                     covers/{id}.webp、封面内容 hash（客户端拼 ?v={hash} 做缓存失效）
+#                     和 32x45 模糊占位图 lqip（WebP data URI）。
+#   covers/{id}.webp  独立封面文件（480x672 WebP q70），客户端按需加载，不再内嵌 base64。
+#   calendar.json     旧包（schema 1，内嵌 base64 封面），只给旧客户端与回退用。
+#
+# 封面增量复用：job 先 checkout 上一版 metadata 分支，内容 hash 未变的封面直接复用，
+# 只有新增/变化的封面才重新下载与编码；未变化的封面不会产生新 git 对象，仓库不按天膨胀。
+#
+# 失败保留上一版：新产物先写 *.new.json，jq 校验通过后才 mv；任一步失败则不发布。
 on:
   schedule:
     - cron: '17 20 * * *' # 每日 04:17（北京时间）
@@ -18,7 +27,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
 
     steps:
       - name: Fetch Bangumi calendar
@@ -353,112 +362,750 @@ jobs:
       - name: Install Pillow
         run: python3 -m pip install --user --quiet pillow
 
-      - name: Embed cover thumbnails
+      - name: Write metadata builder
+        run: |
+          set -euo pipefail
+          cat > build_metadata.py <<'PY'
+          #!/usr/bin/env python3
+          """Build lightweight metadata: covers/*.webp + index.json (+ legacy calendar.json).
+
+          Modes
+            plan  : read merged calendar.json + the previous metadata-branch manifest and print
+                    the covers that still need downloading as TSV: id<TAB>group<TAB>src
+            build : encode/reuse covers, then write
+                      - calendar.new.json   (legacy schema 1, base64 covers embedded)
+                      - index.new.json      (schema 2, light package: cover path + hash + lqip)
+                      - covers/manifest.json (id -> {src, hash, ...} for the next run's reuse)
+
+          Incremental reuse: a cover is reused when the previous manifest has the same source
+          URL and the existing file's sha256 still matches the recorded hash.  Only new or
+          changed covers are downloaded and re-encoded, so the metadata branch only grows by
+          files whose content actually changed.
+
+          Size budget: index.json is hard-capped (default 250,000 bytes, acceptance is
+          250,000).  When the text grows (more subjects, longer summaries) the builder drops
+          unreferenced / least-referenced related entries first, then featured entries, then
+          shortens summaries - weekly rows are never dropped.
+          """
+          import argparse
+          import base64
+          import hashlib
+          import io
+          import json
+          import os
+          import shutil
+          import sys
+
+          from PIL import Image, ImageFilter
+
+          WEBP_PREFIX = "data:image/webp;base64,"
+
+
+          def load_json(path, default=None):
+              try:
+                  with open(path, encoding="utf-8") as f:
+                      return json.load(f)
+              except (OSError, ValueError):
+                  return default
+
+
+          def dump_json(path, data):
+              tmp = path + ".tmp"
+              with open(tmp, "w", encoding="utf-8", newline=chr(10)) as f:
+                  json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+              os.replace(tmp, path)
+
+
+          def json_bytes(data):
+              return len(
+                  json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+              )
+
+
+          def sha16(path):
+              h = hashlib.sha256()
+              with open(path, "rb") as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b""):
+                      h.update(chunk)
+              return h.hexdigest()[:16]
+
+
+          def cover_to_webp(src, dst, w, h, quality, blur=0.0):
+              """Crop-to-fill resize (same geometry as the previous workflow) and save WebP."""
+              with Image.open(src) as im:
+                  img = im.convert("RGB")
+              scale = max(w / img.width, h / img.height)
+              img = img.resize(
+                  (max(1, round(img.width * scale)), max(1, round(img.height * scale))),
+                  Image.LANCZOS,
+              )
+              left = (img.width - w) // 2
+              top = (img.height - h) // 2
+              img = img.crop((left, top, left + w, top + h))
+              if blur:
+                  img = img.filter(ImageFilter.GaussianBlur(blur))
+              img.save(dst, "WEBP", quality=quality, method=6)
+
+
+          def lqip_data_uri(path, w, h, quality, blur):
+              with Image.open(path) as im:
+                  img = im.convert("RGB")
+              scale = max(w / img.width, h / img.height)
+              img = img.resize(
+                  (max(1, round(img.width * scale)), max(1, round(img.height * scale))),
+                  Image.LANCZOS,
+              )
+              left = (img.width - w) // 2
+              top = (img.height - h) // 2
+              img = img.crop((left, top, left + w, top + h))
+              if blur:
+                  img = img.filter(ImageFilter.GaussianBlur(blur))
+              buf = io.BytesIO()
+              img.save(buf, "WEBP", quality=quality, method=6)
+              return WEBP_PREFIX + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+          def b64_data_uri(path):
+              with open(path, "rb") as f:
+                  return WEBP_PREFIX + base64.b64encode(f.read()).decode("ascii")
+
+
+          def collect_jobs(calendar):
+              """Unique cover jobs in a stable order; weekly items first."""
+              jobs = []
+              seen = set()
+
+              def add(item_id, src, group):
+                  try:
+                      key = int(item_id)
+                  except (TypeError, ValueError):
+                      return
+                  if key in seen or not src or not isinstance(src, str):
+                      return
+                  if not src.startswith(("http://", "https://")):
+                      return
+                  seen.add(key)
+                  jobs.append({"id": key, "src": src, "group": group})
+
+              for day in calendar.get("days", []):
+                  for item in day.get("items", []):
+                      add(item.get("id"), item.get("image", ""), "calendar")
+              for value in (calendar.get("related_subjects") or {}).values():
+                  add(value.get("id"), value.get("image", ""), "extra")
+              for value in calendar.get("featured") or []:
+                  add(value.get("id"), value.get("image", ""), "extra")
+              return jobs
+
+
+          def reusable(job, prev_covers, prev_manifest):
+              """Return the previous cover path when source URL and content hash both match."""
+              entry = (prev_manifest.get("covers") or {}).get(str(job["id"]))
+              if not entry or entry.get("src") != job["src"]:
+                  return None
+              path = os.path.join(prev_covers, "%s.webp" % job["id"])
+              if not os.path.isfile(path):
+                  return None
+              if sha16(path) != entry.get("hash"):
+                  return None
+              return path
+
+
+          def cmd_plan(args):
+              calendar = load_json(args.calendar, {})
+              prev_manifest = load_json(args.prev_manifest, {}) or {}
+              lines = []
+              reused = 0
+              for job in collect_jobs(calendar):
+                  if reusable(job, args.prev_covers, prev_manifest):
+                      reused += 1
+                  else:
+                      lines.append("%s\t%s\t%s" % (job["id"], job["group"], job["src"]))
+              with open(args.plan_out, "w", encoding="utf-8", newline=chr(10)) as f:
+                  f.write("\n".join(lines) + ("\n" if lines else ""))
+              print(
+                  "covers plan: reusable=%d to_fetch=%d (previous manifest entries=%d)"
+                  % (reused, len(lines), len(prev_manifest.get("covers") or {}))
+              )
+
+
+          def make_cover_info(jobs, covers_dir, args):
+              info = {}
+              for job in jobs:
+                  path = os.path.join(covers_dir, "%s.webp" % job["id"])
+                  if not os.path.isfile(path):
+                      continue
+                  info[str(job["id"])] = {
+                      "cover": "covers/%s.webp" % job["id"],
+                      "cover_hash": sha16(path),
+                      "lqip": lqip_data_uri(
+                          path, args.lqip_w, args.lqip_h, args.lqip_q, args.lqip_blur
+                      ),
+                  }
+              return info
+
+
+          def build_index(calendar, cover_info, args):
+              """Light index: text fields + cover path/hash/lqip (no base64 covers)."""
+
+              def with_cover(item, summary_cap):
+                  out = dict(item)
+                  out.pop("image", None)
+                  summary = out.get("summary") or ""
+                  if summary_cap and len(summary) > summary_cap:
+                      out["summary"] = summary[:summary_cap]
+                  if args.tags_cap and isinstance(out.get("tags"), list):
+                      out["tags"] = out["tags"][: args.tags_cap]
+                  if args.aliases_cap and isinstance(out.get("aliases"), list):
+                      out["aliases"] = out["aliases"][: args.aliases_cap]
+                  ci = cover_info.get(str(out.get("id")))
+                  if ci:
+                      out["cover"] = ci["cover"]
+                      out["cover_hash"] = ci["cover_hash"]
+                      out["lqip"] = ci["lqip"]
+                  return out
+
+              days = []
+              for day in calendar.get("days", []):
+                  days.append(
+                      {
+                          "weekday": day.get("weekday", 0),
+                          "weekday_cn": day.get("weekday_cn", ""),
+                          "items": [
+                              with_cover(item, args.summary_weekly)
+                              for item in day.get("items", [])
+                          ],
+                      }
+                  )
+
+              related = {}
+              for key, value in (calendar.get("related_subjects") or {}).items():
+                  entry = with_cover(value, args.summary_extra)
+                  if "cover" in entry:
+                      related[key] = entry
+
+              featured = []
+              for value in calendar.get("featured") or []:
+                  entry = with_cover(value, args.summary_extra)
+                  if "cover" in entry:
+                      featured.append(entry)
+
+              covered = {str(entry["id"]) for entry in related.values()}
+              covered |= {str(entry["id"]) for entry in featured}
+              for day in days:
+                  for item in day["items"]:
+                      if "cover" in item:
+                          covered.add(str(item["id"]))
+              for day in days:
+                  for item in day["items"]:
+                      if isinstance(item.get("related"), list):
+                          item["related"] = [rid for rid in item["related"] if str(rid) in covered]
+
+              return {
+                  "schema": 2,
+                  "home_rows": 1,
+                  "updated_at": calendar.get("updated_at", ""),
+                  "source": "https://api.bgm.tv/calendar",
+                  "days": days,
+                  "related_subjects": related,
+                  "featured": featured,
+              }
+
+
+          def reference_counts(index):
+              refs = {}
+              for day in index.get("days", []):
+                  for item in day.get("items", []):
+                      for rid in item.get("related", []) or []:
+                          key = str(rid)
+                          refs[key] = refs.get(key, 0) + 1
+              return refs
+
+
+          def drop_refs(index, victim):
+              for day in index.get("days", []):
+                  for item in day.get("items", []):
+                      if isinstance(item.get("related"), list):
+                          item["related"] = [rid for rid in item["related"] if str(rid) != victim]
+
+
+          def enforce_index_limit(calendar, cover_info, args):
+              """Shrink the light package until it fits the hard byte budget.
+
+              Order of sacrifice: unreferenced related entries -> least referenced related
+              entries (with their refs) -> featured entries -> shorter summaries -> lqip on
+              related/featured.  Weekly rows (the 7-day schedule) are never dropped.
+              """
+              index = build_index(calendar, cover_info, args)
+              limit = args.index_limit
+              size = json_bytes(index)
+              if size <= limit:
+                  return index, size, {}
+              stats = {"orphans": 0, "related": 0, "featured": 0, "summary_cap": 0, "lqip": 0}
+              while size > limit:
+                  related = index.get("related_subjects") or {}
+                  refs = reference_counts(index)
+                  orphans = [key for key in related if key not in refs]
+                  if orphans:
+                      for key in orphans:
+                          related.pop(key, None)
+                      stats["orphans"] += len(orphans)
+                      size = json_bytes(index)
+                      continue
+                  victims = [key for key in related if key in refs]
+                  if victims:
+                      victim = min(victims, key=lambda key: (refs[key], -int(key)))
+                      related.pop(victim, None)
+                      drop_refs(index, victim)
+                      stats["related"] += 1
+                      size = json_bytes(index)
+                      continue
+                  if index.get("featured"):
+                      index["featured"].pop()
+                      stats["featured"] += 1
+                      size = json_bytes(index)
+                      continue
+                  if args.summary_weekly > 40 or args.summary_extra > 40:
+                      args.summary_weekly = max(40, args.summary_weekly - 10)
+                      args.summary_extra = max(40, args.summary_extra - 10)
+                      stats["summary_cap"] += 1
+                      index = build_index(calendar, cover_info, args)
+                      size = json_bytes(index)
+                      continue
+                  # last resort: drop placeholders, never the schedule itself
+                  dropped = False
+                  for key in list((index.get("related_subjects") or {}).keys()):
+                      entry = index["related_subjects"][key]
+                      if "lqip" in entry:
+                          entry.pop("lqip")
+                          dropped = True
+                          break
+                  if not dropped:
+                      for entry in index.get("featured") or []:
+                          if "lqip" in entry:
+                              entry.pop("lqip")
+                              dropped = True
+                              break
+                  if not dropped:
+                      break
+                  stats["lqip"] += 1
+                  size = json_bytes(index)
+              return index, size, stats
+
+
+          def build_legacy(calendar, covers, args):
+              """Old schema-1 calendar.json with base64 covers (kept for old clients)."""
+
+              def data_uri(item_id, kind):
+                  path = os.path.join(covers, "%s.webp" % item_id)
+                  if not os.path.isfile(path):
+                      return None
+                  if kind == "weekly":
+                      return b64_data_uri(path)
+                  # extras keep the old 240x336 q60 shape to preserve the legacy size budget
+                  tmp = os.path.join(args.tmp_dir, "%s.legacy.webp" % item_id)
+                  cover_to_webp(path, tmp, args.legacy_w, args.legacy_h, args.legacy_q, 0.0)
+                  try:
+                      return b64_data_uri(tmp)
+                  finally:
+                      try:
+                          os.remove(tmp)
+                      except OSError:
+                          pass
+
+              weekly_uri = {}
+              extra_uri = {}
+              for job in collect_jobs(calendar):
+                  uri = data_uri(job["id"], "weekly" if job["group"] == "calendar" else "extra")
+                  if uri:
+                      target = weekly_uri if job["group"] == "calendar" else extra_uri
+                      target[str(job["id"])] = uri
+
+              def apply(item, kind):
+                  out = dict(item)
+                  uri = (weekly_uri if kind == "weekly" else extra_uri).get(str(out.get("id")))
+                  if uri:
+                      out["image"] = uri
+                  return out
+
+              days = []
+              for day in calendar.get("days", []):
+                  days.append(
+                      {
+                          "weekday": day.get("weekday", 0),
+                          "weekday_cn": day.get("weekday_cn", ""),
+                          "items": [apply(item, "weekly") for item in day.get("items", [])],
+                      }
+                  )
+              related = {}
+              for key, value in (calendar.get("related_subjects") or {}).items():
+                  entry = apply(value, "extra")
+                  if str(entry.get("image", "")).startswith("data:image/"):
+                      related[key] = entry
+              featured = []
+              for value in calendar.get("featured") or []:
+                  entry = apply(value, "extra")
+                  if str(entry.get("image", "")).startswith("data:image/"):
+                      featured.append(entry)
+
+              covered = set(weekly_uri) | set(extra_uri)
+              for day in days:
+                  for item in day["items"]:
+                      if isinstance(item.get("related"), list):
+                          item["related"] = [rid for rid in item["related"] if str(rid) in covered]
+
+              return {
+                  "schema": 1,
+                  "home_rows": 1,
+                  "updated_at": calendar.get("updated_at", ""),
+                  "source": calendar.get("source", "https://api.bgm.tv/calendar"),
+                  "days": days,
+                  "related_subjects": related,
+                  "featured": featured,
+              }
+
+
+          def prune_covers(covers_dir, keep_ids):
+              removed = 0
+              for name in os.listdir(covers_dir):
+                  if not name.endswith(".webp"):
+                      continue
+                  if name[:-5] not in keep_ids:
+                      try:
+                          os.remove(os.path.join(covers_dir, name))
+                          removed += 1
+                      except OSError:
+                          pass
+              return removed
+
+
+          def cmd_build(args):
+              calendar = load_json(args.calendar, {})
+              prev_manifest = load_json(args.prev_manifest, {}) or {}
+              os.makedirs(args.covers_dir, exist_ok=True)
+              os.makedirs(args.tmp_dir, exist_ok=True)
+              jobs = collect_jobs(calendar)
+              manifest = {
+                  "schema": 1,
+                  "updated_at": calendar.get("updated_at", ""),
+                  "cover_width": args.cover_w,
+                  "cover_height": args.cover_h,
+                  "cover_quality": args.cover_q,
+                  "covers": {},
+              }
+              reused = new = failed = 0
+              for job in jobs:
+                  dst = os.path.join(args.covers_dir, "%s.webp" % job["id"])
+                  prev = reusable(job, args.prev_covers, prev_manifest)
+                  if prev:
+                      if os.path.abspath(prev) != os.path.abspath(dst):
+                          shutil.copyfile(prev, dst)
+                      reused += 1
+                  else:
+                      raw = os.path.join(args.raw_dir, "%s.src" % job["id"])
+                      if not os.path.isfile(raw) or os.path.getsize(raw) == 0:
+                          failed += 1
+                          continue
+                      try:
+                          cover_to_webp(raw, dst, args.cover_w, args.cover_h, args.cover_q, 0.0)
+                          new += 1
+                      except Exception as exc:  # noqa: BLE001 - one bad image must not kill the run
+                          print("cover encode failed: id=%s %s" % (job["id"], exc))
+                          failed += 1
+                          continue
+                  manifest["covers"][str(job["id"])] = {
+                      "src": job["src"],
+                      "hash": sha16(dst),
+                      "w": args.cover_w,
+                      "h": args.cover_h,
+                      "q": args.cover_q,
+                      "bytes": os.path.getsize(dst),
+                  }
+
+              cover_info = make_cover_info(jobs, args.covers_dir, args)
+              index, index_size, trim_stats = enforce_index_limit(calendar, cover_info, args)
+
+              legacy = build_legacy(calendar, args.covers_dir, args)
+
+              dump_json(args.out_index, index)
+              dump_json(args.out_calendar, legacy)
+              dump_json(args.out_manifest, manifest)
+              print("covers: jobs=%d reused=%d new=%d failed=%d" % (len(jobs), reused, new, failed))
+              print(
+                  "index bytes=%d (limit %d) legacy bytes=%d manifest entries=%d"
+                  % (index_size, args.index_limit, json_bytes(legacy), len(manifest["covers"]))
+              )
+              if trim_stats:
+                  print("index trim: %s" % json.dumps(trim_stats, sort_keys=True))
+              print(
+                  "index entries: weekly=%d related=%d featured=%d"
+                  % (
+                      sum(len(day.get("items", [])) for day in index.get("days", [])),
+                      len(index.get("related_subjects") or {}),
+                      len(index.get("featured") or []),
+                  )
+              )
+
+
+          def used_cover_ids(index, legacy):
+              """Cover ids still referenced by either published file."""
+              used = set()
+              for day in index.get("days", []):
+                  for item in day.get("items", []):
+                      if item.get("cover"):
+                          used.add(str(item.get("id")))
+              for value in (index.get("related_subjects") or {}).values():
+                  if value.get("cover"):
+                      used.add(str(value.get("id")))
+              for value in index.get("featured") or []:
+                  if value.get("cover"):
+                      used.add(str(value.get("id")))
+              for day in legacy.get("days", []):
+                  for item in day.get("items", []):
+                      if str(item.get("image", "")).startswith("data:image/"):
+                          used.add(str(item.get("id")))
+              for value in (legacy.get("related_subjects") or {}).values():
+                  if str(value.get("image", "")).startswith("data:image/"):
+                      used.add(str(value.get("id")))
+              for value in legacy.get("featured") or []:
+                  if str(value.get("image", "")).startswith("data:image/"):
+                      used.add(str(value.get("id")))
+              return used
+
+
+          def cmd_prune(args):
+              """Delete cover files that neither published file references any more."""
+              index = load_json(args.index, {}) or {}
+              legacy = load_json(args.calendar, {}) or {}
+              manifest = load_json(args.manifest, {}) or {"covers": {}}
+              used = used_cover_ids(index, legacy)
+              removed = prune_covers(args.covers_dir, used)
+              manifest["covers"] = {
+                  key: value
+                  for key, value in (manifest.get("covers") or {}).items()
+                  if key in used
+              }
+              dump_json(args.manifest, manifest)
+              print(
+                  "covers prune: referenced=%d removed=%d manifest entries=%d"
+                  % (len(used), removed, len(manifest["covers"]))
+              )
+
+
+          def main(argv):
+              parser = argparse.ArgumentParser()
+              sub = parser.add_subparsers(dest="mode", required=True)
+
+              def common(p):
+                  p.add_argument("--calendar", required=True)
+                  p.add_argument("--prev-covers", required=True)
+                  p.add_argument("--prev-manifest", required=True)
+
+              prune = sub.add_parser("prune")
+              prune.add_argument("--index", required=True)
+              prune.add_argument("--calendar", required=True)
+              prune.add_argument("--covers-dir", required=True)
+              prune.add_argument("--manifest", required=True)
+
+              plan = sub.add_parser("plan")
+              common(plan)
+              plan.add_argument("--plan-out", required=True)
+
+              build = sub.add_parser("build")
+              common(build)
+              build.add_argument("--raw-dir", required=True)
+              build.add_argument("--covers-dir", required=True)
+              build.add_argument("--tmp-dir", required=True)
+              build.add_argument("--out-calendar", required=True)
+              build.add_argument("--out-index", required=True)
+              build.add_argument("--out-manifest", required=True)
+              build.add_argument("--cover-w", type=int, default=480)
+              build.add_argument("--cover-h", type=int, default=672)
+              build.add_argument("--cover-q", type=int, default=70)
+              build.add_argument("--legacy-w", type=int, default=240)
+              build.add_argument("--legacy-h", type=int, default=336)
+              build.add_argument("--legacy-q", type=int, default=60)
+              build.add_argument("--lqip-w", type=int, default=32)
+              build.add_argument("--lqip-h", type=int, default=45)
+              build.add_argument("--lqip-q", type=int, default=15)
+              build.add_argument("--lqip-blur", type=float, default=1.2)
+              build.add_argument("--summary-weekly", type=int, default=200)
+              build.add_argument("--summary-extra", type=int, default=200)
+              build.add_argument("--tags-cap", type=int, default=10)
+              build.add_argument("--aliases-cap", type=int, default=8)
+              build.add_argument("--index-limit", type=int, default=250000)
+
+              args = parser.parse_args(argv)
+              if args.mode == "plan":
+                  cmd_plan(args)
+              elif args.mode == "prune":
+                  cmd_prune(args)
+              else:
+                  cmd_build(args)
+
+
+          if __name__ == "__main__":
+              main(sys.argv[1:])
+          PY
+          python3 -m py_compile build_metadata.py
+          echo "builder: $(wc -l < build_metadata.py) lines"
+
+      - name: Restore previous metadata branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          rm -rf prev prev_clone
+          if git clone --depth 1 --single-branch --branch metadata \
+               "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+               prev_clone > clone.log 2>&1; then
+            mv prev_clone prev
+            echo "restored previous metadata branch: $(du -sh prev | cut -f1)"
+            echo "previous covers: $(find prev/covers -maxdepth 1 -name '*.webp' 2>/dev/null | wc -l)"
+            if [ -f prev/index.json ]; then
+              echo "previous index.json bytes: $(wc -c < prev/index.json)"
+            else
+              echo "previous index.json bytes: 0 (old layout)"
+            fi
+            if [ -f prev/calendar.json ]; then
+              echo "previous calendar.json bytes: $(wc -c < prev/calendar.json)"
+            else
+              echo "previous calendar.json bytes: 0"
+            fi
+          else
+            echo "no previous metadata branch (first run); starting with an empty cover cache"
+            sed -e 's/x-access-token:[^@]*@/x-access-token:***@/g' clone.log | tail -3 || true
+            rm -rf prev_clone
+            mkdir -p prev/covers
+            cd prev
+            git init -q
+            git checkout -q -b metadata
+            cd ..
+          fi
+          rm -f clone.log
+
+      - name: Plan cover downloads
+        run: |
+          set -euo pipefail
+          python3 build_metadata.py plan \
+            --calendar calendar.json \
+            --prev-covers prev/covers \
+            --prev-manifest prev/covers/manifest.json \
+            --plan-out cover_plan.tsv
+          awk -F'\t' '$2 == "calendar"' cover_plan.tsv > cover_calendar.tsv
+          awk -F'\t' '$2 == "extra"' cover_plan.tsv > cover_extra.tsv
+          echo "cover jobs: calendar=$(wc -l < cover_calendar.tsv) extra=$(wc -l < cover_extra.tsv)"
+
+      - name: Fetch changed covers
         run: |
           set -euo pipefail
           UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius)"
-          mkdir -p covers
-          : > covers.jsonl
-          cat > resize_cover.py <<'PY'
-          import sys
-          from PIL import Image
-          src, dst = sys.argv[1], sys.argv[2]
-          w, h, quality = int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
-          img = Image.open(src).convert("RGB")
-          scale = max(w / img.width, h / img.height)
-          img = img.resize(
-              (max(1, round(img.width * scale)), max(1, round(img.height * scale))),
-              Image.LANCZOS,
-          )
-          left = (img.width - w) // 2
-          top = (img.height - h) // 2
-          img = img.crop((left, top, left + w, top + h))
-          img.save(dst, "WEBP", quality=quality, method=6)
-          PY
+          mkdir -p raw_covers
           ok=0
           fail=0
-          # 周表封面（480×672）与相关/高分封面（240×336）分两组预算，
-          # 避免周表封面慢时把相关/高分封面饿死；周表失败保留原 URL，相关/高分失败会被丢弃。
-          jq -r '.days[].items[] | [.id, .image, 480, 672, 70] | @tsv' calendar.json > cover_calendar.tsv
-          {
-            jq -r '.related_subjects | to_entries[] | [.value.id, .value.image, 240, 336, 60] | @tsv' calendar.json
-            jq -r '.featured[]? | [.id, .image, 240, 336, 60] | @tsv' calendar.json
-          } | awk -F'\t' '!seen[$1]++' > cover_extra.tsv
+          # 只下载新增或内容变化的封面（复用判定已在 plan 步骤完成）。
+          # 两组独立预算，避免周表封面慢时把相关/高分封面饿死。
           fetch_covers() {
             local jobs="$1"
             local budget="$2"
             local deadline=$((SECONDS + budget))
             local consecutive=0
-            while IFS=$'\t' read -r id url w h q; do
+            local id group url
+            while IFS=$'\t' read -r id group url; do
+              [ -n "$id" ] || continue
+              [ -n "$url" ] || continue
               if [ "$SECONDS" -ge "$deadline" ] || [ "$consecutive" -ge 10 ]; then
-                echo "cover fetch stopped early: $jobs (elapsed=${SECONDS}s failures=$consecutive)"
+                echo "cover fetch stopped early: $jobs (elapsed=${SECONDS}s consecutive_failures=$consecutive)"
                 break
               fi
-              [ -n "$url" ] || continue
               case "$url" in
                 http://*|https://*) ;;
                 *) continue ;;
               esac
-              src="covers/${id}.src"
-              out="covers/${id}.webp"
-              if curl -fsSL --retry 1 --retry-delay 1 --max-time 12 -A "$UA" -o "$src" "$url" \
-                 && python3 resize_cover.py "$src" "$out" "$w" "$h" "$q"; then
-                b64="$(base64 -w0 "$out")"
-                jq -n --arg id "$id" --arg data "data:image/webp;base64,$b64" \
-                  '{($id): $data}' >> covers.jsonl
-                ok=$((ok+1))
+              if curl -fsSL --retry 1 --retry-delay 1 --max-time 15 -A "$UA" \
+                   -o "raw_covers/${id}.src" "$url"; then
+                ok=$((ok + 1))
                 consecutive=0
               else
-                echo "cover failed: id=$id url=$url"
-                fail=$((fail+1))
-                consecutive=$((consecutive+1))
+                echo "cover download failed: id=$id"
+                rm -f "raw_covers/${id}.src"
+                fail=$((fail + 1))
+                consecutive=$((consecutive + 1))
               fi
-              rm -f "$src"
             done < "$jobs"
           }
-          echo "cover jobs: calendar=$(wc -l < cover_calendar.tsv) extra=$(wc -l < cover_extra.tsv)"
           fetch_covers cover_calendar.tsv 600
-          fetch_covers cover_extra.tsv 300
-          echo "covers ok=$ok fail=$fail"
-          if [ -s covers.jsonl ]; then
-            jq -s 'add' covers.jsonl > covers.json
-            jq --slurpfile covers covers.json '
-              .days |= map(.items |= map(
-                .image = ($covers[0][(.id|tostring)] // .image)
-              ))
-              | .related_subjects |= with_entries(
-                  .value.image = ($covers[0][(.value.id|tostring)] // .value.image)
-                )
-              | .featured |= map(
-                  .image = ($covers[0][(.id|tostring)] // .image)
-                )
-            ' calendar.json > calendar.with-covers.json
-            mv calendar.with-covers.json calendar.json
-          fi
-          # 相关/高分条目在电视上不能回源加载封面：目标没有内嵌封面（周表/相关/高分任一来源）
-          # 的直接丢弃，避免空白卡片；周表条目封面失败仍保留原 URL（与切片 1 一致）。
-          jq '
-            . as $root
-            | ([ $root.days[].items[],
-                 (($root.related_subjects // {}) | .[]),
-                 ($root.featured // [])[] ]
-               | map(select(.image | startswith("data:image/")))
-               | map({key: (.id | tostring), value: true})
-               | from_entries) as $withCover
-            | .related_subjects |= with_entries(select(.value.image | startswith("data:image/")))
-            | .featured |= map(select(.image | startswith("data:image/")))
-            | .days |= map(.items |= map(
-                .related = [.related[]? as $rid | select($withCover[($rid | tostring)] == true) | $rid]
-              ))
-          ' calendar.json > calendar.filtered.json
-          mv calendar.filtered.json calendar.json
-          echo "calendar with covers bytes: $(wc -c < calendar.json)"
-          echo "embedded covers: $(jq '[.days[].items[] | select(.image | startswith("data:image/"))] | length' calendar.json)"
-          echo "related subjects with cover: $(jq '[.related_subjects[] | select(.image | startswith("data:image/"))] | length' calendar.json)"
-          echo "featured with cover: $(jq '[.featured[] | select(.image | startswith("data:image/"))] | length' calendar.json)"
-          jq -e '(.schema == 1) and (.days | length == 7)' calendar.json
+          fetch_covers cover_extra.tsv 600
+          echo "downloaded ok=$ok fail=$fail"
 
-      - name: Trim metadata to size budget
+      - name: Build index.json and covers
+        run: |
+          set -euo pipefail
+          mkdir -p covers tmp
+          python3 build_metadata.py build \
+            --calendar calendar.json \
+            --prev-covers prev/covers \
+            --prev-manifest prev/covers/manifest.json \
+            --raw-dir raw_covers \
+            --covers-dir covers \
+            --tmp-dir tmp \
+            --out-calendar calendar.new.json \
+            --out-index index.new.json \
+            --out-manifest covers/manifest.json \
+            --lqip-w 32 --lqip-h 45 --lqip-q 15 --lqip-blur 1.2 \
+            --summary-weekly 200 --summary-extra 200 \
+            --tags-cap 10 --aliases-cap 8 \
+            --index-limit 250000
+
+      - name: Validate new artifacts
+        run: |
+          set -euo pipefail
+          # 结构：schema 2、7 天、周表有条目
+          jq -e '(.schema == 2) and (.days | length == 7) and ([.days[].items[]] | length > 0)' index.new.json > /dev/null
+          # 每个带封面的条目必须同时有内容 hash 与 lqip
+          jq -e '([.days[].items[], (.related_subjects | .[]), (.featured | .[])]
+                 | map(select(has("cover")))
+                 | all(has("cover_hash") and has("lqip")))' index.new.json > /dev/null
+          # lqip 必须是 WebP data URI
+          jq -e '([.days[].items[], (.related_subjects | .[]), (.featured | .[])]
+                 | map(select(has("lqip")))
+                 | all(.lqip | startswith("data:image/webp;base64,")))' index.new.json > /dev/null
+          # 轻包体积硬上限（验收 ≤250,000 bytes；构建器已按 250,000 自裁剪）
+          index_size="$(wc -c < index.new.json)"
+          echo "index.json bytes: ${index_size} (hard limit 250000)"
+          test "$index_size" -le 250000
+          # 每个封面引用都要有对应文件
+          jq -r '[.days[].items[], (.related_subjects | .[]), (.featured | .[])]
+                 | .[] | select(has("cover")) | .cover' index.new.json | sort -u > cover_refs.txt
+          missing=0
+          while read -r rel; do
+            [ -n "$rel" ] || continue
+            if [ ! -f "$rel" ]; then
+              echo "missing cover file: $rel"
+              missing=$((missing + 1))
+            fi
+          done < cover_refs.txt
+          test "$missing" -eq 0
+          echo "cover refs: $(wc -l < cover_refs.txt), missing: $missing"
+          # 网络整体失败时不要把上一版（有封面）的轻包覆盖掉：周表封面数骤降即中止
+          new_weekly_covers="$(jq '[.days[].items[] | select(has("cover"))] | length' index.new.json)"
+          prev_weekly_covers=0
+          if [ -f prev/index.json ]; then
+            prev_weekly_covers="$(jq '[.days[].items[] | select(has("cover"))] | length' prev/index.json 2>/dev/null || echo 0)"
+          fi
+          echo "weekly covers: new=${new_weekly_covers} previous=${prev_weekly_covers}"
+          if [ "$prev_weekly_covers" -ge 50 ]; then
+            threshold=$((prev_weekly_covers * 8 / 10))
+            test "$new_weekly_covers" -ge "$threshold"
+          fi
+          # 旧包结构不变
+          jq -e '(.schema == 1) and (.days | length == 7)' calendar.new.json > /dev/null
+          echo "legacy calendar.json bytes: $(wc -c < calendar.new.json)"
+          # 校验通过才安装
+          mv index.new.json index.json
+          mv calendar.new.json calendar.json
+          echo "installed: index.json=$(wc -c < index.json) calendar.json=$(wc -c < calendar.json) covers=$(find covers -maxdepth 1 -name '*.webp' | wc -l)"
+
+      - name: Trim legacy calendar.json to size budget
         run: |
           set -euo pipefail
           cat > trim_metadata.py <<'PY'
@@ -523,6 +1170,16 @@ jobs:
           echo "related subjects: $(jq '.related_subjects | length' calendar.json)"
           echo "featured: $(jq '.featured | length' calendar.json)"
 
+      - name: Prune unreferenced covers
+        run: |
+          set -euo pipefail
+          python3 build_metadata.py prune \
+            --index index.json \
+            --calendar calendar.json \
+            --covers-dir covers \
+            --manifest covers/manifest.json
+          echo "covers kept: $(find covers -maxdepth 1 -name '*.webp' | wc -l), total: $(du -sh covers | cut -f1)"
+
       - name: Upload JSON artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -531,23 +1188,44 @@ jobs:
             raw_calendar.json
             calendar.urls.json
             calendar.json
+            index.json
             relations.json
             related_subjects.json
             featured.json
+            covers/manifest.json
           retention-days: 7
 
-      - name: Publish calendar.json to metadata branch
+      - name: Publish metadata branch
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          work="$(mktemp -d)"
-          cp calendar.json "$work/calendar.json"
-          cd "$work"
-          git init -q
+          cd prev
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -q -b metadata
-          git add calendar.json
+          cp -f ../calendar.json calendar.json
+          cp -f ../index.json index.json
+          mkdir -p covers
+          if [ -n "$(find ../covers -maxdepth 1 -name '*.webp' -print -quit)" ]; then
+            cp -f ../covers/*.webp covers/
+          fi
+          cp -f ../covers/manifest.json covers/manifest.json
+          # 删掉不再被引用的旧封面，避免仓库无限增长（增量复用只针对仍在用的封面）
+          for f in covers/*.webp; do
+            [ -e "$f" ] || continue
+            if [ ! -f "../covers/$(basename "$f")" ]; then
+              rm -f "$f"
+            fi
+          done
+          git add -A
+          changed="$(git diff --cached --name-only | wc -l)"
+          cover_changed="$(git diff --cached --name-only -- 'covers/*.webp' | wc -l)"
+          cover_added="$(git diff --cached --name-status -- 'covers/*.webp' | awk '$1 == "A"' | wc -l)"
+          cover_removed="$(git diff --cached --name-status -- 'covers/*.webp' | awk '$1 == "D"' | wc -l)"
+          echo "changed files: ${changed} (covers changed: ${cover_changed}, added: ${cover_added}, removed: ${cover_removed})"
+          if [ "$changed" -eq 0 ]; then
+            echo "nothing to publish"
+            exit 0
+          fi
           git commit -q -m "metadata: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" metadata
