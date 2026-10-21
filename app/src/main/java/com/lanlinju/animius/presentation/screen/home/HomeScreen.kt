@@ -110,33 +110,36 @@ fun HomeScreen(
     onNavigateToMetadataDetail: (metadataId: Long, title: String) -> Unit = { _, _ -> },
 ) {
     val homeViewModel = hiltViewModel<HomeViewModel>()
-    val availableDataList = homeViewModel.homeDataList.collectAsState()
-    val metadataRows = homeViewModel.metadataRows.collectAsState()
     val isTv = isAndroidTV(LocalContext.current)
-
-    LaunchedEffect(isTv) {
-        if (isTv) homeViewModel.loadMetadataRows()
-    }
+    // TV：只吃轻包元数据三行；手机/平板：仍走源站首页（行为不变）
+    val availableDataList = homeViewModel.homeDataList.collectAsState()
+    val metadataState = homeViewModel.metadataState.collectAsState()
+    val state = if (isTv) metadataState.value else availableDataList.value
 
     LaunchedEffect(SourceHolder.isSourceChanged) {
         if (SourceHolder.isSourceChanged) {
-            homeViewModel.refresh()
             SourceHolder.isSourceChanged = false
+            // TV 首页不依赖源站：切源不重新抓首页，也不重下轻包
+            if (!isTv) homeViewModel.refresh()
         }
     }
 
-    val sourceState = availableDataList.value
-    // 源站首页挂了（如当前源 521）时，不要让整页报错：元数据行可用就先显示元数据
-    val metadataFallback = isTv && metadataRows.value.isNotEmpty() && sourceState is Resource.Error
-    val effectiveState = if (metadataFallback) Resource.Success(emptyList()) else sourceState
+    // TV 元数据就绪后，后台预取非可见行封面。
+    // 用页面级 LaunchedEffect：离开首页（进详情/播放器）即取消，不会在播放时继续抢带宽。
+    LaunchedEffect(isTv, metadataState.value.data) {
+        if (isTv) {
+            metadataState.value.data?.let { rows -> homeViewModel.prefetchHiddenRowCovers(rows) }
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         StateHandler(
-            state = effectiveState,
+            state = state,
             onLoading = { LoadingIndicator() },
             onFailure = {
                 WarningMessage(
-                    textId = Res.string.txt_empty_result,
+                    // TV 不再回退源站内容：没有可用数据时给明确提示 + 重试（用户 2026-10-21 拍板）
+                    textId = if (isTv) Res.string.home_metadata_unavailable else Res.string.txt_empty_result,
                     onRetryClick = { homeViewModel.refresh() }
                 )
             }
@@ -166,9 +169,9 @@ fun HomeScreen(
 
                     resource.data?.let { data ->
                         HomeContent(
-                            data = if (isTv) metadataRows.value + data else data,
-                            metadataRowCount = if (isTv) metadataRows.value.size else 0,
-                            showSourceError = metadataFallback,
+                            // TV 只有元数据三行，不再拼接源站行
+                            data = data,
+                            metadataRowCount = if (isTv) data.size else 0,
                             useGridLayout = useGridLayout,
                             isWideScreen = isWideScreen,
                             homeBackgroundColor = homeBackgroundColor,
@@ -195,7 +198,6 @@ fun HomeScreen(
 private fun HomeContent(
     data: List<Home>,
     metadataRowCount: Int,
-    showSourceError: Boolean,
     useGridLayout: Boolean,
     isWideScreen: Boolean,
     homeBackgroundColor: Color,
@@ -214,15 +216,6 @@ private fun HomeContent(
                 .padding(vertical = padding),
             verticalArrangement = Arrangement.spacedBy(padding),
         ) {
-            if (showSourceError) {
-                Text(
-                    text = stringResource(Res.string.home_source_failed_metadata_only),
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(start = dimensionResource(Res.dimen.large_padding))
-                )
-            }
-
             if (isWideScreen) {
                 HomeTile(
                     useGridLayout = useGridLayout,
@@ -372,6 +365,9 @@ private fun GridLayoutTabs(
                     image = homeItem.img,
                     label = homeItem.title,
                     onClick = { onItemClick(homeItem) },
+                    backupImage = homeItem.imgBackup,
+                    fallbackImage = homeItem.imgFallback,
+                    lqip = homeItem.lqip,
                     modifier = Modifier
                         .focusRequester(itemRequester)
                         .onFocusChanged {
@@ -595,6 +591,9 @@ fun HomeRow(
                     onClick = {
                         onItemClicked(homeItem!!)
                     },
+                    backupImage = homeItem?.imgBackup,
+                    fallbackImage = homeItem?.imgFallback,
+                    lqip = homeItem?.lqip,
                     modifier = Modifier.width(dimensionResource(Res.dimen.media_card_width))
                 )
             },
@@ -607,6 +606,9 @@ fun HomeRow(
                     onClick = {
                         onItemClicked(homeItem!!)
                     },
+                    backupImage = homeItem?.imgBackup,
+                    fallbackImage = homeItem?.imgFallback,
+                    lqip = homeItem?.lqip,
                     modifier = Modifier
                         .testTag("home-item-$rowIndex-$index")
                         .focusRequester(itemRequester)

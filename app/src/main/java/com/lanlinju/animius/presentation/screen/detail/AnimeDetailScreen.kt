@@ -348,6 +348,9 @@ fun AnimeDetailScreen(
                             label = null,
                             onClick = {},
                             enabled = false,
+                            backupImage = animeDetail.imgBackup,
+                            fallbackImage = animeDetail.imgFallback,
+                            lqip = animeDetail.imgLqip,
                             modifier = Modifier.width(dimensionResource(Res.dimen.media_card_width)),
                             onSuccess = { bitmap ->
                                 if (isDynamicImageColor) {
@@ -886,6 +889,9 @@ fun AnimeRelated(
                 image = anime.img,
                 label = anime.title,
                 onClick = { onRelatedAnimeClick(anime) },
+                backupImage = anime.imgBackup,
+                fallbackImage = anime.imgFallback,
+                lqip = anime.lqip,
                 modifier = Modifier.width(dimensionResource(Res.dimen.media_card_width))
             )
         }

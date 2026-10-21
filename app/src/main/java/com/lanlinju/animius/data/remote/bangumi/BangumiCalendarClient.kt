@@ -83,6 +83,29 @@ class BangumiCalendarClient @Inject constructor(
     /** 进程内已加载过就直接取；没加载过返回 null（调用方可用 [loadItem]） */
     fun findItem(id: Long): MetadataItem? = lastCalendar?.items?.get(id)
 
+    /**
+     * 只读本地缓存，不发任何网络请求（调用方需在 IO 线程调用）。
+     *
+     * 用途：轻包 index.json 完全不可用时，用旧的 calendar.json 缓存兜底
+     * （用户 2026-10-21 拍板：不回退源站内容，但旧缓存仍可用）。
+     */
+    fun loadCachedOnly(now: Instant = Instant.now()): CalendarLoadResult {
+        val cached = readCache(now)
+        return if (cached != null) {
+            lastCalendar = cached.calendar
+            "META legacy cache ok items=${cached.calendar.itemCount} freshness=${cached.freshness}"
+                .log("BehaviorTrace")
+            CalendarLoadResult.Success(
+                calendar = cached.calendar,
+                fromCache = true,
+                freshness = cached.freshness,
+            )
+        } else {
+            "META legacy cache missing".log("BehaviorTrace")
+            CalendarLoadResult.Unavailable("no legacy cache")
+        }
+    }
+
     /** 按 Bangumi id 取元数据详情；必要时先加载（优先本地缓存）周表 */
     suspend fun loadItem(id: Long, forceRefresh: Boolean = false): MetadataItem? {
         if (!forceRefresh) findItem(id)?.let { return it }

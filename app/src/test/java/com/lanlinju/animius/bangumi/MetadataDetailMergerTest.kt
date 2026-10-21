@@ -101,4 +101,53 @@ class MetadataDetailMergerTest {
 
         assertEquals("源站标题", merged.title)
     }
+
+    @Test
+    fun `metadata cover fallbacks and lqip override source detail`() {
+        val metaWithCovers = meta.copy(
+            image = "https://gcore.example/cover.webp?v=1",
+            imageBackup = "https://testingcf.example/cover.webp?v=1",
+            imageFallback = "https://gh-proxy.example/cover.webp?v=1",
+            lqip = "data:image/webp;base64,AA==",
+            related = listOf(
+                MetadataRelated(
+                    id = 200,
+                    title = "续作",
+                    image = "https://gcore.example/r.webp?v=1",
+                    imageBackup = "https://testingcf.example/r.webp?v=1",
+                    imageFallback = "https://gh-proxy.example/r.webp?v=1",
+                    lqip = "data:image/webp;base64,BB==",
+                ),
+            ),
+        )
+
+        val merged = MetadataDetailMerger.merge(sourceDetail, metaWithCovers)
+
+        assertEquals("https://gcore.example/cover.webp?v=1", merged.img)
+        assertEquals("https://testingcf.example/cover.webp?v=1", merged.imgBackup)
+        assertEquals("https://gh-proxy.example/cover.webp?v=1", merged.imgFallback)
+        assertEquals("data:image/webp;base64,AA==", merged.imgLqip)
+
+        val related = merged.relatedAnimes.single()
+        assertEquals(200L, related.metadataId)
+        assertEquals("https://testingcf.example/r.webp?v=1", related.imgBackup)
+        assertEquals("https://gh-proxy.example/r.webp?v=1", related.imgFallback)
+        assertEquals("data:image/webp;base64,BB==", related.lqip)
+    }
+
+    @Test
+    fun `missing metadata cover fallbacks keep source detail values`() {
+        // 旧缓存/源站详情没有三级封面：不能被空串覆盖
+        val sourceWithCovers = sourceDetail.copy(
+            imgBackup = "https://source.example/backup.jpg",
+            imgFallback = "https://source.example/fallback.jpg",
+            imgLqip = "data:image/webp;base64,CC==",
+        )
+
+        val merged = MetadataDetailMerger.merge(sourceWithCovers, meta)
+
+        assertEquals("https://source.example/backup.jpg", merged.imgBackup)
+        assertEquals("https://source.example/fallback.jpg", merged.imgFallback)
+        assertEquals("data:image/webp;base64,CC==", merged.imgLqip)
+    }
 }

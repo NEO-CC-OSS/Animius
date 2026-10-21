@@ -109,6 +109,7 @@ import com.lanlinju.animius.util.KEY_AUTO_ORIENTATION_ENABLED
 import com.lanlinju.animius.util.KEY_IS_AUTO_CHECK_UPDATE
 import com.lanlinju.animius.util.KEY_SOURCE_MODE
 import com.lanlinju.animius.util.KEY_USE_DOWNLOAD_DIRECTORY
+import com.lanlinju.animius.util.Resource
 import com.lanlinju.animius.util.SourceHolder
 import com.lanlinju.animius.util.SOURCE_SUMMARY_UPDATED
 import com.lanlinju.animius.util.SourceHolder.DEFAULT_ANIME_SOURCE
@@ -149,6 +150,7 @@ fun WeekScreen(
     var showDomainChangeDialog by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
+    val isTv = isAndroidTV(context)
     val uriHandler = LocalUriHandler.current
     val scope = rememberCoroutineScope()
     val dayOfWeek = remember { LocalDate.now().dayOfWeek.value - 1 }
@@ -164,10 +166,11 @@ fun WeekScreen(
                         modifier = Modifier
                             .tvFocus(shape = RoundedCornerShape(8.dp))
                             .clickable {
-                                // 回退/双失败时点标题直接重试；正常状态仍打开源切换
+                                // 失败/空态时点标题直接重试；正常状态仍打开源切换
                                 val canRetry =
-                                    metadataInfo.origin == WeekDataOrigin.SourceSite ||
-                                        metadataInfo.origin == WeekDataOrigin.Unavailable
+                                    metadataInfo.origin == WeekDataOrigin.Unavailable ||
+                                        metadataInfo.origin == WeekDataOrigin.Empty ||
+                                        weekDataState is Resource.Error
                                 if (canRetry) {
                                     viewModel.refresh()
                                 } else {
@@ -179,12 +182,15 @@ fun WeekScreen(
                             text = stringResource(id = R.string.lbl_schedule),
                             style = MaterialTheme.typography.titleLarge
                         )
-                        Text(
-                            text = weekStatusText(metadataInfo),
-                            style = MaterialTheme.typography.bodyLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        // 状态行是 TV 元数据链路的信息；手机/平板保持 tv.6 的纯标题顶栏
+                        if (isTv) {
+                            Text(
+                                text = weekStatusText(metadataInfo),
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
 
                 },
@@ -221,14 +227,21 @@ fun WeekScreen(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
                 beyondViewportPageCount = 1,
-                userScrollEnabled = !isAndroidTV(LocalContext.current)
+                userScrollEnabled = !isTv
             ) { page ->
                 StateHandler(
                     state = weekDataState,
                     onLoading = { LoadingIndicator() },
                     onFailure = {
+                        // TV 时间表不回退源站：没有可用数据时给明确提示 + 重试（用户 2026-10-21 拍板）
                         WarningMessage(
-                            textId = R.string.txt_empty_result,
+                            textId = when {
+                                metadataInfo.origin == WeekDataOrigin.Empty ->
+                                    R.string.week_metadata_empty
+
+                                isTv -> R.string.week_metadata_unavailable
+                                else -> R.string.txt_empty_result
+                            },
                             onRetryClick = { viewModel.refresh() }
                         )
                     }
@@ -317,6 +330,7 @@ private fun weekStatusText(info: WeekMetadataInfo): String {
         }
         WeekDataOrigin.SourceSite -> stringResource(R.string.week_metadata_fallback)
         WeekDataOrigin.Unavailable -> stringResource(R.string.week_metadata_unavailable)
+        WeekDataOrigin.Empty -> stringResource(R.string.week_metadata_empty)
     }
 }
 
@@ -403,6 +417,9 @@ fun WeekList(
                     image = anime.img,
                     label = anime.title,
                     onClick = { onItemClicked(anime) },
+                    backupImage = anime.imgBackup,
+                    fallbackImage = anime.imgFallback,
+                    lqip = anime.lqip,
                     modifier = Modifier
                         .focusRequester(itemRequester)
                         .onFocusChanged { if (it.isFocused) lastFocusedIndex.intValue = index }

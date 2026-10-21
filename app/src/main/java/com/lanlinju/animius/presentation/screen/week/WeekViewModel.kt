@@ -6,14 +6,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.lanlinju.animius.BuildConfig
 import com.lanlinju.animius.R
-import com.lanlinju.animius.data.remote.bangumi.BangumiCalendarClient
 import com.lanlinju.animius.data.remote.bangumi.CalendarFreshness
 import com.lanlinju.animius.data.remote.bangumi.CalendarLoadResult
+import com.lanlinju.animius.data.remote.bangumi.MetadataIndexClient
 import com.lanlinju.animius.domain.model.Anime
 import com.lanlinju.animius.domain.model.UpdateState
 import com.lanlinju.animius.domain.repository.AnimeRepository
 import com.lanlinju.animius.util.Resource
 import com.lanlinju.animius.util.fetchLatestRelease
+import com.lanlinju.animius.util.isAndroidTV
 import com.lanlinju.animius.util.isNewerTvVersion
 import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.toast
@@ -21,6 +22,7 @@ import com.lanlinju.animius.work.cancelUpdateWork
 import com.lanlinju.animius.work.enqueueUpdateWork
 import com.lanlinju.animius.work.observeUpdateWork
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import io.ktor.client.HttpClient
 import java.time.Instant
 import javax.inject.Inject
@@ -33,10 +35,28 @@ enum class WeekDataOrigin {
     Loading,
     Metadata,
     MetadataCache,
+
+    /** 手机/平板：源站周表（tv.6 行为）；TV 不再使用该来源 */
     SourceSite,
 
-    /** 元数据不可用，源站回退也失败 */
+    /** TV：元数据不可用（网络/缓存都失败），空态 + 重试 */
     Unavailable,
+
+    /** TV：元数据结构合法但 7 天都没有条目，与"不可用"区分 */
+    Empty,
+}
+
+/**
+ * 周表数据源策略（纯函数，便于单测与代码审查）。
+ *
+ * - TV：只读轻包 index.json；不可用/全空 → 空态 + 重试，**不回退源站**（用户 2026-10-21 拍板）；
+ * - 手机/平板：与 tv.6 完全一致，只读源站周表，不发起任何元数据请求。
+ */
+internal object WeekDataSourcePolicy {
+    enum class Source { MetadataIndex, SourceSite }
+
+    fun sourceFor(isTv: Boolean): Source =
+        if (isTv) Source.MetadataIndex else Source.SourceSite
 }
 
 data class WeekMetadataInfo(
@@ -48,10 +68,14 @@ data class WeekMetadataInfo(
 
 @HiltViewModel
 class WeekViewModel @Inject constructor(
+    @ApplicationContext context: Context,
     private val repository: AnimeRepository,
     private val httpClient: HttpClient,
-    private val calendarClient: BangumiCalendarClient,
+    private val metadataIndexClient: MetadataIndexClient,
 ) : ViewModel() {
+
+    /** TV 逻辑走这个分支：时间表不可用时不回退源站（用户 2026-10-21 拍板）；手机保留原回退 */
+    private val isTv = isAndroidTV(context)
     private val _weekDataMap: MutableStateFlow<Resource<Map<Int, List<Anime>>>> =
         MutableStateFlow(value = Resource.Loading)
     val weekDataMap: StateFlow<Resource<Map<Int, List<Anime>>>> get() = _weekDataMap
@@ -83,41 +107,73 @@ class WeekViewModel @Inject constructor(
 
     private fun loadWeekData(forceRefresh: Boolean) {
         viewModelScope.launch {
-            _metadataInfo.value = WeekMetadataInfo(origin = WeekDataOrigin.Loading)
-            when (val result = calendarClient.load(forceRefresh)) {
-                is CalendarLoadResult.Success -> {
-                    _weekDataMap.value = Resource.Success(result.calendar.days)
-                    _metadataInfo.value = WeekMetadataInfo(
-                        origin = if (result.fromCache) {
-                            WeekDataOrigin.MetadataCache
-                        } else {
-                            WeekDataOrigin.Metadata
-                        },
-                        updatedAt = result.calendar.updatedAt,
-                        freshness = result.freshness,
-                        failureReason = result.failureReason,
-                    )
-                    (
-                        "META ui origin=${_metadataInfo.value.origin} " +
-                            "freshness=${result.freshness} items=${result.calendar.itemCount}"
-                    ).log("BehaviorTrace")
-                }
+            when (WeekDataSourcePolicy.sourceFor(isTv)) {
+                // 手机/平板：tv.6 行为，只读源站周表，不请求元数据
+                WeekDataSourcePolicy.Source.SourceSite -> loadSourceWeek()
 
-                is CalendarLoadResult.Unavailable -> {
-                    // 元数据不可用：保留现有源站周表作为回退；源站也失败时顶部提示改为两者都不可用
-                    val sourceData = repository.getWeekData()
-                    _weekDataMap.value = sourceData
+                // TV：只读轻包 index，不可用/全空 → 空态 + 重试，不回退源站
+                WeekDataSourcePolicy.Source.MetadataIndex -> loadMetadataWeek(forceRefresh)
+            }
+        }
+    }
+
+    /** 手机/平板路径：与 tv.6 一致（源站周表） */
+    private suspend fun loadSourceWeek() {
+        _metadataInfo.value = WeekMetadataInfo(origin = WeekDataOrigin.Loading)
+        val sourceData = repository.getWeekData()
+        _weekDataMap.value = sourceData
+        _metadataInfo.value = WeekMetadataInfo(
+            origin = if (sourceData is Resource.Error) {
+                WeekDataOrigin.Unavailable
+            } else {
+                WeekDataOrigin.SourceSite
+            },
+        )
+        "META ui origin=${_metadataInfo.value.origin} source-only".log("BehaviorTrace")
+    }
+
+    /** TV 路径：轻包 index.json */
+    private suspend fun loadMetadataWeek(forceRefresh: Boolean) {
+        _metadataInfo.value = WeekMetadataInfo(origin = WeekDataOrigin.Loading)
+        when (val result = metadataIndexClient.load(forceRefresh)) {
+            is CalendarLoadResult.Success -> {
+                val calendar = result.calendar
+                if (calendar.itemCount == 0) {
+                    // 结构合法但 7 天全空：与"不可用"区分，仍可重试
+                    _weekDataMap.value = Resource.Error(IllegalStateException("week empty"))
                     _metadataInfo.value = WeekMetadataInfo(
-                        origin = if (sourceData is Resource.Error) {
-                            WeekDataOrigin.Unavailable
-                        } else {
-                            WeekDataOrigin.SourceSite
-                        },
-                        failureReason = result.reason,
+                        origin = WeekDataOrigin.Empty,
+                        updatedAt = calendar.updatedAt,
+                        freshness = result.freshness,
                     )
-                    "META ui origin=${_metadataInfo.value.origin} reason=${result.reason}"
-                        .log("BehaviorTrace")
+                    "META ui origin=Empty items=0".log("BehaviorTrace")
+                    return
                 }
+                _weekDataMap.value = Resource.Success(calendar.days)
+                _metadataInfo.value = WeekMetadataInfo(
+                    origin = if (result.fromCache) {
+                        WeekDataOrigin.MetadataCache
+                    } else {
+                        WeekDataOrigin.Metadata
+                    },
+                    updatedAt = calendar.updatedAt,
+                    freshness = result.freshness,
+                    failureReason = result.failureReason,
+                )
+                (
+                    "META ui origin=${_metadataInfo.value.origin} " +
+                        "freshness=${result.freshness} items=${calendar.itemCount}"
+                ).log("BehaviorTrace")
+            }
+
+            is CalendarLoadResult.Unavailable -> {
+                // 用户拍板：TV 不回退源站 → 空态 + 重试（StateHandler 的 onFailure）
+                _weekDataMap.value = Resource.Error(IllegalStateException(result.reason))
+                _metadataInfo.value = WeekMetadataInfo(
+                    origin = WeekDataOrigin.Unavailable,
+                    failureReason = result.reason,
+                )
+                "META ui origin=Unavailable reason=${result.reason}".log("BehaviorTrace")
             }
         }
     }
@@ -134,23 +190,22 @@ class WeekViewModel @Inject constructor(
      * 只有当前处于源站回退/不可用状态时，才重新取一次源站周表（不碰元数据网络）。
      */
     fun onSourceChanged() {
-        val origin = _metadataInfo.value.origin
-        if (origin == WeekDataOrigin.Metadata || origin == WeekDataOrigin.MetadataCache) {
-            "META ui source changed keep origin=$origin".log("BehaviorTrace")
-            return
-        }
-        viewModelScope.launch {
-            _weekDataMap.value = Resource.Loading
-            val sourceData = repository.getWeekData()
-            _weekDataMap.value = sourceData
-            _metadataInfo.value = _metadataInfo.value.copy(
-                origin = if (sourceData is Resource.Error) {
-                    WeekDataOrigin.Unavailable
-                } else {
-                    WeekDataOrigin.SourceSite
+        when (WeekDataSourcePolicy.sourceFor(isTv)) {
+            // TV 时间表不读源站：切源/改域名不需要重新取任何周表数据
+            WeekDataSourcePolicy.Source.MetadataIndex -> {
+                "META ui source changed tv ignore origin=${_metadataInfo.value.origin}"
+                    .log("BehaviorTrace")
+            }
+
+            // 手机/平板：源站周表随源变化，重新取一次（tv.6 行为）
+            WeekDataSourcePolicy.Source.SourceSite -> {
+                viewModelScope.launch {
+                    _weekDataMap.value = Resource.Loading
+                    loadSourceWeek()
+                    "META ui source changed origin=${_metadataInfo.value.origin}"
+                        .log("BehaviorTrace")
                 }
-            )
-            "META ui source changed origin=${_metadataInfo.value.origin}".log("BehaviorTrace")
+            }
         }
     }
 

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -23,6 +24,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -43,6 +45,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.lanlinju.animius.util.CROSSFADE_DURATION
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import com.lanlinju.animius.R as Res
 
@@ -94,7 +97,13 @@ fun MediaSmall(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     label: String? = null,
-    onSuccess: (Bitmap) -> Unit = { }
+    onSuccess: (Bitmap) -> Unit = { },
+    /* 元数据轻包（schema 2）：第二级回退（jsDelivr 备用域名）；为空跳过 */
+    backupImage: String? = null,
+    /* 元数据轻包（schema 2）：最后一级回退（gh-proxy）；为空跳过 */
+    fallbackImage: String? = null,
+    /* 元数据轻包（schema 2）：加载中的模糊占位图（data URI）；为空不显示 */
+    lqip: String? = null,
 ) {
     MediaSmall(
         modifier = modifier
@@ -107,7 +116,10 @@ fun MediaSmall(
             ),
         image = image,
         label = label,
-        onSuccess = onSuccess
+        onSuccess = onSuccess,
+        backupImage = backupImage,
+        fallbackImage = fallbackImage,
+        lqip = lqip,
     )
 }
 
@@ -116,7 +128,10 @@ fun MediaSmall(
     image: String?,
     modifier: Modifier = Modifier,
     label: String? = null,
-    onSuccess: (Bitmap) -> Unit = { }
+    onSuccess: (Bitmap) -> Unit = { },
+    backupImage: String? = null,
+    fallbackImage: String? = null,
+    lqip: String? = null,
 ) {
     Card(
         modifier = modifier,
@@ -147,23 +162,65 @@ fun MediaSmall(
                 CoverPlaceholder(label = label, modifier = imageModifier)
             }
         } else {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(image)
-                    .crossfade(CROSSFADE_DURATION)
-                    .build(),
-                contentDescription = label,
-                contentScale = ContentScale.Crop,
-                // 仅"加载失败"兜底底图（P2-1）；不设 placeholder —— background.png 是横版，
-                // 用 ContentScale.Crop 填竖版卡片会被大幅裁剪放大，视觉跳变明显
-                error = painterResource(Res.drawable.background),
-                modifier = imageModifier,
-                onSuccess = {
-                    // 某些来源返回非位图（如矢量/GIF）时强转会崩，取不到位图就跳过取色回调
-                    val bitmap = (it.result.drawable as? BitmapDrawable)?.bitmap
-                    if (bitmap != null) onSuccess(bitmap)
+            // 轻包封面三级加载：jsDelivr 主域名 → jsDelivr 备用域名 → gh-proxy；
+            // 加载中先显示 LQIP 模糊图（竖版、比例一致），加载成功后才撤掉
+            val sources = remember(image, backupImage, fallbackImage) {
+                listOfNotNull(image, backupImage, fallbackImage)
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinct()
+            }
+            var stage by remember(image, backupImage, fallbackImage) { mutableIntStateOf(0) }
+            var loaded by remember(image, backupImage, fallbackImage) { mutableStateOf(false) }
+            // LQIP 必须一直垫在清晰图下面，直到 crossfade 真正结束：
+            // onSuccess 触发时渐显才刚开始，此时撤掉 LQIP 会露出 500 ms 卡片底色（模糊图→底色→清晰图）。
+            // 加载失败时 loaded 永远为 false → LQIP 保留，不露底色。
+            var lqipSettled by remember(image, backupImage, fallbackImage) { mutableStateOf(false) }
+            LaunchedEffect(loaded) {
+                if (loaded) {
+                    delay(CROSSFADE_DURATION.toLong())
+                    lqipSettled = true
                 }
-            )
+            }
+            val model = sources.getOrElse(stage) { image }
+            val lqipBitmap = if (!lqipSettled) {
+                lqip?.takeIf { it.isNotBlank() }?.let { rememberDecodedCover(it) }
+            } else {
+                null
+            }
+            Box(modifier = imageModifier) {
+                if (lqipBitmap != null) {
+                    Image(
+                        bitmap = lqipBitmap.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(model)
+                        .crossfade(CROSSFADE_DURATION)
+                        .build(),
+                    contentDescription = label,
+                    contentScale = ContentScale.Crop,
+                    // 不设 placeholder —— background.png 是横版，用 ContentScale.Crop 填竖版卡片
+                    // 会被大幅裁剪放大，视觉跳变明显；竖版模糊图改用 LQIP 叠在下面。
+                    // 有 LQIP 时失败态保留模糊图（不再用横版底图把它盖住）；没有 LQIP 才用底图兜底。
+                    error = if (lqip.isNullOrBlank()) painterResource(Res.drawable.background) else null,
+                    modifier = Modifier.fillMaxSize(),
+                    onError = {
+                        // 依次尝试备用域名 / gh-proxy；都失败就停在最后一级，由 error/LQIP 兜底
+                        if (stage < sources.lastIndex) stage += 1
+                    },
+                    onSuccess = {
+                        loaded = true
+                        // 某些来源返回非位图（如矢量/GIF）时强转会崩，取不到位图就跳过取色回调
+                        val bitmap = (it.result.drawable as? BitmapDrawable)?.bitmap
+                        if (bitmap != null) onSuccess(bitmap)
+                    }
+                )
+            }
         }
 
         if (label != null)

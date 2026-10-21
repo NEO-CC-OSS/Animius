@@ -22,6 +22,9 @@ object MetadataDetailMerger {
                     detailUrl = "",
                     episodeName = "",
                     metadataId = it.id,
+                    imgBackup = it.imageBackup,
+                    imgFallback = it.imageFallback,
+                    lqip = it.lqip,
                 )
             }
         } else {
@@ -33,6 +36,9 @@ object MetadataDetailMerger {
             desc = meta.summary.ifBlank { detail.desc },
             tags = meta.tags.ifEmpty { detail.tags },
             relatedAnimes = related,
+            imgBackup = meta.imageBackup.ifBlank { detail.imgBackup },
+            imgFallback = meta.imageFallback.ifBlank { detail.imgFallback },
+            imgLqip = meta.lqip.ifBlank { detail.imgLqip },
         )
     }
 }

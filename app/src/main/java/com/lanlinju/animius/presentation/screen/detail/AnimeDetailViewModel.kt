@@ -6,8 +6,8 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
-import com.lanlinju.animius.data.remote.bangumi.BangumiCalendarClient
 import com.lanlinju.animius.data.remote.bangumi.MetadataDetailMerger
+import com.lanlinju.animius.data.remote.bangumi.MetadataIndexClient
 import com.lanlinju.animius.data.remote.bangumi.MetadataItem
 import com.lanlinju.animius.data.repository.SourceResolveResult
 import com.lanlinju.animius.data.repository.SourceResolver
@@ -65,7 +65,7 @@ class AnimeDetailViewModel @Inject constructor(
     private val roomRepository: RoomRepository,
     private val getAnimeDetailUseCase: GetAnimeDetailUseCase,
     private val sourceResolver: SourceResolver,
-    private val calendarClient: BangumiCalendarClient,
+    private val metadataIndexClient: MetadataIndexClient,
 ) : ViewModel() {
 
     private val _animeDetailState: MutableStateFlow<Resource<AnimeDetail?>> =
@@ -134,9 +134,11 @@ class AnimeDetailViewModel @Inject constructor(
             _animeDetailState.value = Resource.Loading
             _sourceInfo.value = SourceInfoState.Resolving(index = 0, total = 0, mode = null)
 
+            // 元数据从已加载的轻包 index 取（days + related_subjects + featured 合并查找表），
+            // 不再为了取一条数据解析 9 MB 整包
             val item = if (metadataId > 0) {
-                calendarClient.findItem(metadataId)
-                    ?: withTimeoutOrNull(5_000) { calendarClient.loadItem(metadataId) }
+                metadataIndexClient.findItem(metadataId)
+                    ?: withTimeoutOrNull(5_000) { metadataIndexClient.loadItem(metadataId) }
             } else {
                 null
             }

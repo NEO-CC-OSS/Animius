@@ -14,13 +14,41 @@ data class BangumiCalendar(
     val featured: List<Anime> = emptyList(),
     /* 生成物是否带切片 3 的首页/相关推荐数据；旧缓存为 false，首页不显示元数据行 */
     val supportsHomeRows: Boolean = false,
+    /* 轻包（schema 2）的封面索引：id → 相对路径/内容哈希/LQIP；旧 calendar.json 为空 */
+    val covers: Map<Long, MetadataCover> = emptyMap(),
 )
+
+/**
+ * 轻包封面：独立文件按需加载（不再内嵌 9 MB base64）。
+ *
+ * @param path 相对路径，形如 covers/390200.webp
+ * @param hash 封面内容哈希，拼 `?v=` 做缓存失效
+ * @param lqip 32×45 WebP 的 data URI，加载中先显示
+ */
+data class MetadataCover(
+    val path: String,
+    val hash: String,
+    val lqip: String,
+) {
+    /** 三级候选：jsDelivr 主域名 → jsDelivr 备用域名 → gh-proxy（与 MediaSmall 的加载顺序一致） */
+    val urls: List<String> get() = MetadataCoverUrls.candidates(path, hash)
+
+    val primaryUrl: String get() = urls.getOrElse(0) { "" }
+    val backupUrl: String get() = urls.getOrElse(1) { "" }
+    val fallbackUrl: String get() = urls.getOrElse(2) { "" }
+}
 
 /** 相关推荐条目：只保留详情页卡片需要的字段 */
 data class MetadataRelated(
     val id: Long,
     val title: String,
     val image: String,
+    /* 第二级回退（jsDelivr 备用域名）；旧内嵌封面为空 */
+    val imageBackup: String = "",
+    /* 首选封面失败时的回退地址（gh-proxy）；旧内嵌封面为空 */
+    val imageFallback: String = "",
+    /* 加载中的模糊占位图（data URI）；旧内嵌封面为空 */
+    val lqip: String = "",
 )
 
 /** 元数据条目的详情字段：周表卡片只需要标题/封面，详情页再取简介/标签 */
@@ -36,6 +64,12 @@ data class MetadataItem(
     val aliases: List<String> = emptyList(),
     /** Bangumi 相关条目（切片 3）；为空时详情页回退源站相关推荐 */
     val related: List<MetadataRelated> = emptyList(),
+    /* 第二级回退（jsDelivr 备用域名）；旧内嵌封面为空 */
+    val imageBackup: String = "",
+    /* 首选封面失败时的回退地址（gh-proxy）；旧内嵌封面为空 */
+    val imageFallback: String = "",
+    /* 加载中的模糊占位图（data URI）；旧内嵌封面为空 */
+    val lqip: String = "",
 )
 
 enum class CalendarFreshness {
