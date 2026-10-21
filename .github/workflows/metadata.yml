@@ -1,7 +1,7 @@
 name: Metadata Calendar
 
 # 每天在 GitHub runner 上抓一次 Bangumi 日历，产出三份数据到 metadata 分支：
-#   index.json        轻包（schema 2，硬上限 250 KB）：周表 7 天 + 首页三行所需字段 +
+#   index.json        轻包（schema 2，硬上限 400 KB）：周表 7 天 + 首页三行所需字段 +
 #                     相关推荐关系 + 高分推荐（纯文字），外加每张封面的相对路径
 #                     covers/{id}.webp、封面内容 hash（客户端拼 ?v={hash} 做缓存失效）
 #                     和 32x45 模糊占位图 lqip（WebP data URI）。
@@ -382,8 +382,8 @@ jobs:
           changed covers are downloaded and re-encoded, so the metadata branch only grows by
           files whose content actually changed.
 
-          Size budget: index.json is hard-capped (default 250,000 bytes, acceptance is
-          250,000).  When the text grows (more subjects, longer summaries) the builder drops
+          Size budget: index.json is hard-capped (default 400,000 bytes, acceptance is
+          400,000).  When the text grows (more subjects, longer summaries) the builder drops
           unreferenced / least-referenced related entries first, then featured entries, then
           shortens summaries - weekly rows are never dropped.
           """
@@ -932,7 +932,7 @@ jobs:
               build.add_argument("--summary-extra", type=int, default=200)
               build.add_argument("--tags-cap", type=int, default=10)
               build.add_argument("--aliases-cap", type=int, default=8)
-              build.add_argument("--index-limit", type=int, default=250000)
+              build.add_argument("--index-limit", type=int, default=400000)
 
               args = parser.parse_args(argv)
               if args.mode == "plan":
@@ -1054,7 +1054,7 @@ jobs:
             --lqip-w 32 --lqip-h 45 --lqip-q 15 --lqip-blur 1.2 \
             --summary-weekly 200 --summary-extra 200 \
             --tags-cap 10 --aliases-cap 8 \
-            --index-limit 250000
+            --index-limit 400000
 
       - name: Validate new artifacts
         run: |
@@ -1069,10 +1069,10 @@ jobs:
           jq -e '([.days[].items[], (.related_subjects | .[]), (.featured | .[])]
                  | map(select(has("lqip")))
                  | all(.lqip | startswith("data:image/webp;base64,")))' index.new.json > /dev/null
-          # 轻包体积硬上限（验收 ≤250,000 bytes；构建器已按 250,000 自裁剪）
+          # 轻包体积硬上限（验收 ≤400,000 bytes；构建器已按 400,000 自裁剪）
           index_size="$(wc -c < index.new.json)"
-          echo "index.json bytes: ${index_size} (hard limit 250000)"
-          test "$index_size" -le 250000
+          echo "index.json bytes: ${index_size} (hard limit 400000)"
+          test "$index_size" -le 400000
           # 每个封面引用都要有对应文件
           jq -r '[.days[].items[], (.related_subjects | .[]), (.featured | .[])]
                  | .[] | select(has("cover")) | .cover' index.new.json | sort -u > cover_refs.txt
