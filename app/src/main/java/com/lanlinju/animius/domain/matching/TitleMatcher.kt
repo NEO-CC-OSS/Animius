@@ -16,6 +16,18 @@ object TitleMatcher {
     /** 候选名允许比目标名短的最大字符数（源站标题常带系列前缀） */
     const val MAX_CANDIDATE_SHORTER = 8
 
+    /** 打分权重（任务卡 §6.1）：只决定「几个都可信时先验谁」，绝不参与门槛 */
+    /** 与目标精确相等：必须高于「中文别名精确 35 + 10 = 45」，否则别名会盖过精确标题 */
+    const val SCORE_EXACT_TITLE = 50
+    const val SCORE_EXACT_ALIAS = 35
+    const val SCORE_TARGET_CONTAINS_CANDIDATE = 30
+    const val SCORE_EPISODE_EXACT = 15
+    const val SCORE_EPISODE_NEAR = 8
+    const val SCORE_EPISODE_FAR = -10
+    const val SCORE_CHINESE_ALIAS_EXACT = 10
+    const val SCORE_RANK_FIRST = 5
+    const val SCORE_RANK_TOP_THREE = 2
+
     private val yearPattern = Regex("[（(\\[]\\s*\\d{4}\\s*[）)\\]]")
     private val chineseSeasonPattern = Regex("第\\s*([一二三四五六七八九十0-9０-９]+)\\s*[季期部]")
     private val seasonWordPattern = Regex("(?i)season\\s*(\\d+)")
@@ -120,10 +132,90 @@ object TitleMatcher {
     }
 
     /**
+     * 给「已通过门槛」的候选打分；返回 null 表示候选不可信（门槛与 [isTrustworthy] 完全一致）。
+     *
+     * 门槛零改动：负分只让候选排到后面，不会变成「被接受」的候选；不可信候选永远返回 null，
+     * 所以 [rankCandidates] 里不会出现被门槛拒绝的条目。
+     *
+     * @param episodeCount 候选详情的集数，搜索阶段拿不到就传 null（不加不减）
+     * @param expectedEpisodes 元数据的 `total_episodes`，≤0 时不做集数比较
+     * @param rank 候选在搜索结果里的名次（1 起）；[rankCandidates] 按位置自动传入
+     */
+    fun score(
+        target: String,
+        candidate: String,
+        aliases: List<String> = emptyList(),
+        episodeCount: Int? = null,
+        expectedEpisodes: Int = 0,
+        rank: Int = 0,
+    ): Int? {
+        val aliasBases = aliases.map(::normalize).filter { it.isNotEmpty() }
+        if (!isCandidateTrusted(target, candidate, aliases)) return null
+
+        val targetBase = normalize(target)
+        val candidateBase = normalize(candidate)
+        var total = 0
+
+        when {
+            candidateBase == targetBase -> total += SCORE_EXACT_TITLE
+            targetBase.contains(candidateBase) ->
+                total += SCORE_TARGET_CONTAINS_CANDIDATE - (targetBase.length - candidateBase.length)
+        }
+        if (aliasBases.any { it == candidateBase }) total += SCORE_EXACT_ALIAS
+        if (aliases.any { isChineseText(it) && normalize(it) == candidateBase }) {
+            total += SCORE_CHINESE_ALIAS_EXACT
+        }
+
+        if (episodeCount != null && episodeCount > 0 && expectedEpisodes > 0) {
+            val diff = kotlin.math.abs(episodeCount - expectedEpisodes)
+            total += when {
+                diff == 0 -> SCORE_EPISODE_EXACT
+                diff <= 2 -> SCORE_EPISODE_NEAR
+                else -> SCORE_EPISODE_FAR
+            }
+        }
+
+        // 排名加分只给「非精确命中」的候选：精确标题 50 / 精确别名 45 已是同类上限，
+        // 再加排名分会让「中文别名排第 1」压过「精确标题排第 4」（2026-10-22 独立审查 must-fix）
+        val exactTitle = candidateBase == targetBase
+        val exactAlias = aliasBases.any { it == candidateBase }
+        if (!exactTitle && !exactAlias) {
+            total += when (rank) {
+                1 -> SCORE_RANK_FIRST
+                2, 3 -> SCORE_RANK_TOP_THREE
+                else -> 0
+            }
+        }
+        return total
+    }
+
+    /**
+     * 可信候选按分数降序排列，同分保持原始搜索顺序；不可信候选不出现在结果里。
+     * 返回值带原始下标，调用方据此回到候选列表（按顺序做详情验证）。
+     */
+    fun rankCandidates(
+        target: String,
+        candidates: List<String>,
+        aliases: List<String> = emptyList(),
+    ): List<RankedCandidate> {
+        if (normalize(target).isEmpty()) return emptyList()
+        return candidates.indices
+            .mapNotNull { index ->
+                val title = candidates[index]
+                val score = score(target, title, aliases, rank = index + 1) ?: return@mapNotNull null
+                RankedCandidate(index = index, title = title, score = score)
+            }
+            .sortedWith(compareByDescending<RankedCandidate> { it.score }.thenBy { it.index })
+    }
+
+    /**
      * 从候选标题里挑最可信的一条；没有可信候选返回 null。
      * [aliases] 是同一部番的其他名字（内置别名表 + Bangumi 别名）：
      * 候选只要与目标或任一别名可信匹配就算命中。
      * 优先级：与目标完全相等 > 与别名完全相等 > 长度差更小 > 原始顺序靠前。
+     *
+     * 兼容包装：行为与 tv.7 完全一致（[rankCandidates] 的打分只用于「几个都可信时先验谁」，
+     * 不改变本函数的挑选结果）。
      */
     fun pickBest(
         target: String,
@@ -134,14 +226,7 @@ object TitleMatcher {
         if (targetBase.isEmpty()) return null
         val aliasBases = aliases.map(::normalize).filter { it.isNotEmpty() }.toSet()
         return candidates.indices
-            .filter { index ->
-                val candidate = candidates[index]
-                isTrustworthy(target, candidate) ||
-                    // 别名匹配也要服从目标的季数/剧场版上下文：
-                    // 否则「某番 第二季」会被别名「某番」带到第一季
-                    (contextCompatible(target, candidate) &&
-                        aliasBases.any { alias -> isTrustworthy(alias, candidate) })
-            }
+            .filter { index -> isCandidateTrusted(target, candidates[index], aliases) }
             .minWithOrNull(
                 compareBy(
                     { index ->
@@ -155,6 +240,26 @@ object TitleMatcher {
                     { it },
                 )
             )
+    }
+
+    /**
+     * 门槛：与 [pickBest] 完全同一条规则（目标可信，或目标上下文内某别名可信）。
+     *
+     * [aliases] 必须传**原始别名**（不要先 normalize）：别名里的季标/剧场版标记要参与
+     * [isTrustworthy] 的季数比较；先 normalize 会把季标剥掉，导致「某番 第3期」这类
+     * 别名永远匹配不上带季标的候选（2026-10-22 实测暴露）。
+     */
+    private fun isCandidateTrusted(
+        target: String,
+        candidate: String,
+        aliases: List<String>,
+    ): Boolean {
+        if (normalize(target).isEmpty()) return false
+        return isTrustworthy(target, candidate) ||
+            // 别名匹配也要服从目标的季数/剧场版上下文：
+            // 否则「某番 第二季」会被别名「某番」带到第一季
+            (contextCompatible(target, candidate) &&
+                aliases.any { alias -> isTrustworthy(alias, candidate) })
     }
 
     /** 候选是否与目标处于同一季/同一剧场版上下文 */
@@ -201,3 +306,12 @@ object TitleMatcher {
         }
     }
 }
+
+/**
+ * 打过分的候选：`index` 回到原始候选列表，`score` 只用于排序（门槛另由 [TitleMatcher] 判定）。
+ */
+data class RankedCandidate(
+    val index: Int,
+    val title: String,
+    val score: Int,
+)

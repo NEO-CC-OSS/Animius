@@ -1,8 +1,11 @@
 package com.lanlinju.animius.data.repository
 
 import com.lanlinju.animius.data.remote.api.AnimeApi
+import com.lanlinju.animius.data.remote.dto.AnimeBean
 import com.lanlinju.animius.data.remote.dto.AnimeDetailBean
 import com.lanlinju.animius.domain.matching.EpisodeNumber
+import com.lanlinju.animius.domain.matching.RankedCandidate
+import com.lanlinju.animius.domain.matching.SearchQueries
 import com.lanlinju.animius.domain.matching.TitleAliases
 import com.lanlinju.animius.domain.matching.TitleMatcher
 import com.lanlinju.animius.domain.model.AnimeDetail
@@ -44,7 +47,29 @@ data class ResolvedEpisode(
     val headers: Map<String, String>,
 )
 
-data class SourceAttemptFailure(val mode: SourceMode, val reason: String)
+/**
+ * 一个源「为什么没匹配上」的结构化诊断（tv.8 切片 3）。
+ *
+ * 只写 `BehaviorTrace` 日志，界面仍是一句话（用户 2026-10-22 拍板），
+ * 供 AI 判断到底是「站里没有」还是「门槛太严」。
+ */
+data class MatchDiagnostics(
+    /** 真正发出去的搜索次数（关键词，每源最多 [SearchQueries.DEFAULT_MAX] 次） */
+    val queriesTried: Int = 0,
+    /** 搜到的候选条数合计（每个关键词的结果条数累加） */
+    val candidateCount: Int = 0,
+    /** 最接近的候选标题：优先「可信但详情不合格」的那条，其次第一条被门槛拒掉的 */
+    val nearestCandidate: String? = null,
+    /** [nearestCandidate] 被拒的理由 */
+    val rejectReason: String? = null,
+)
+
+data class SourceAttemptFailure(
+    val mode: SourceMode,
+    val reason: String,
+    /** 结构化诊断；「总预算耗尽」「超时」这类没真正探测的失败为 null */
+    val diagnostics: MatchDiagnostics? = null,
+)
 
 data class ResolveProgress(
     val index: Int,
@@ -70,6 +95,13 @@ sealed interface EpisodeResolveResult {
  * 候选顺序：当前源优先（尊重用户选择），其余按固定顺序兜底；已知长期打不开的源排最后。
  * 每个源有独立时间预算，整体有总预算，避免一个坏源拖住整次点播。
  * 匹配规则见 [TitleMatcher]：宁可找不到源，也不能进错番。
+ *
+ * 源内怎么试（tv.8 切片 3，用户 2026-10-22 拍板收窄）：
+ * 关键词来自 [SearchQueries]（中文标题 → 中文别名 → 拉丁别名 → 日文原名，上限 [MAX_QUERIES]），
+ * **按顺序串行**搜第 1 页；候选按 [TitleMatcher.rankCandidates] 的分数顺序验证详情，
+ * 每源最多 [MAX_DETAIL_VERIFICATIONS] 次。源内并发（实测更慢：嘶哩嘶哩 4.96→5.32s、
+ * Age动漫 1.84→2.45s）与搜索翻页（76 次零收益、请求 +34%）在只读实验里都证明是负收益，已移除。
+ * 源之间的并发仍由 [resolveConcurrent] 负责，两者互不影响。
  */
 @Singleton
 class SourceResolver @Inject constructor(
@@ -93,8 +125,17 @@ class SourceResolver @Inject constructor(
         /** 换源的整体预算：给两个慢源留出余量 */
         const val EPISODE_OVERALL_TIMEOUT_MS = 60_000L
 
-        /** 每个源最多尝试的搜索关键词数（主标题 + 原名 + 别名） */
-        private const val MAX_QUERIES = 4
+        /**
+         * 每个源最多尝试的搜索关键词数（中文标题 + 原名 + 别名）。
+         * 上限的唯一出处是 [SearchQueries.DEFAULT_MAX]，这里只做转发，避免两处数字漂移。
+         */
+        private const val MAX_QUERIES = SearchQueries.DEFAULT_MAX
+
+        /** 单源最多详情验证次数（第 1 名 + 第 2 名候选） */
+        private const val MAX_DETAIL_VERIFICATIONS = 2
+
+        /** 第 2 次详情验证前要求的最少剩余预算；不足就放弃，不硬撑 */
+        private const val MIN_VERIFY_BUDGET_MS = 4_000L
 
         /** 并发选源默认上限：当前源 + 2 个兜底同时试（用户 2026-10-21 拍板） */
         const val DEFAULT_CONCURRENCY = 3
@@ -156,6 +197,7 @@ class SourceResolver @Inject constructor(
      * @param title 中文标题（元数据 `name_cn`，为空时用原名）
      * @param originalTitle 原名（中文搜索无结果时的兜底查询）
      * @param aliases 同一部番的其他名字（内置别名表 + Bangumi 别名），用于搜索与候选校验
+     * @param expectedEpisodes 元数据的 `total_episodes`，用于详情复核时的集数吻合度打分；0 = 不比较
      * @param metadataId Bangumi id，用于缓存键
      * @param currentMode 用户当前选择的源，作为第一候选
      */
@@ -163,6 +205,7 @@ class SourceResolver @Inject constructor(
         title: String,
         originalTitle: String = "",
         aliases: List<String> = emptyList(),
+        expectedEpisodes: Int = 0,
         metadataId: Long = 0,
         currentMode: SourceMode,
         exclude: Set<SourceMode> = emptySet(),
@@ -211,12 +254,22 @@ class SourceResolver @Inject constructor(
                 break
             }
 
+            val budget = minOf(PER_SOURCE_TIMEOUT_MS, remaining)
             val source = try {
-                withTimeoutOrNull(minOf(PER_SOURCE_TIMEOUT_MS, remaining)) {
-                    findSource(mode, queries, allAliases)
+                withTimeoutOrNull(budget) {
+                    findSource(
+                        mode = mode,
+                        queries = queries,
+                        aliases = allAliases,
+                        expectedEpisodes = expectedEpisodes,
+                        deadlineAt = System.currentTimeMillis() + budget,
+                    )
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: NoMatchingSourceException) {
+                attempts += SourceAttemptFailure(mode, e.message ?: "没有匹配条目", e.diagnostics)
+                null
             } catch (e: Exception) {
                 attempts += SourceAttemptFailure(mode, e.message ?: e.javaClass.simpleName)
                 null
@@ -233,13 +286,16 @@ class SourceResolver @Inject constructor(
                 key,
                 SourceMatch(source.mode, source.detailUrl, source.siteTitle, now),
             )
-            "SOURCE resolve ok key=$key mode=${source.mode} title=${source.siteTitle} " +
-                "episodes=${source.episodes.size}".log("BehaviorTrace")
+            // 注意：必须先把整行拼好再 .log()——`"a" + "b".log()` 只会记录最后一段
+            val okLog = "SOURCE resolve ok key=$key mode=${source.mode} " +
+                "title=${source.siteTitle} episodes=${source.episodes.size}"
+            okLog.log("BehaviorTrace")
             return@withContext SourceResolveResult.Success(source, fromCache = false)
         }
 
-        "SOURCE resolve failed key=$key attempts=" +
-            attempts.joinToString { "${it.mode}:${it.reason}" }.log("BehaviorTrace")
+        val failLog = "SOURCE resolve failed key=$key attempts=" +
+            attempts.joinToString { "${it.mode}:${it.reason}" }
+        failLog.log("BehaviorTrace")
         SourceResolveResult.Failure(attempts)
     }
 
@@ -263,6 +319,7 @@ class SourceResolver @Inject constructor(
         title: String,
         originalTitle: String = "",
         aliases: List<String> = emptyList(),
+        expectedEpisodes: Int = 0,
         metadataId: Long = 0,
         currentMode: SourceMode,
         exclude: Set<SourceMode> = emptySet(),
@@ -323,6 +380,7 @@ class SourceResolver @Inject constructor(
                 batch = batch,
                 queries = queries,
                 aliases = allAliases,
+                expectedEpisodes = expectedEpisodes,
                 deadlineMillis = deadlineMillis,
                 onStart = { mode ->
                     onProgress(
@@ -343,9 +401,10 @@ class SourceResolver @Inject constructor(
                     key,
                     SourceMatch(source.mode, source.detailUrl, source.siteTitle, now),
                 )
-                "SOURCE resolve ok key=$key mode=${source.mode} title=${source.siteTitle} " +
-                    "episodes=${source.episodes.size} concurrency=$concurrency"
-                    .log("BehaviorTrace")
+                val okLog = "SOURCE resolve ok key=$key mode=${source.mode} " +
+                    "title=${source.siteTitle} episodes=${source.episodes.size} " +
+                    "concurrency=$concurrency"
+                okLog.log("BehaviorTrace")
                 return@withContext SourceResolveResult.Success(source, fromCache = false)
             }
 
@@ -364,13 +423,17 @@ class SourceResolver @Inject constructor(
             }
         }
 
-        "SOURCE resolve failed key=$key attempts=" +
-            attempts.joinToString { "${it.mode}:${it.reason}" }.log("BehaviorTrace")
+        val failLog = "SOURCE resolve failed key=$key attempts=" +
+            attempts.joinToString { "${it.mode}:${it.reason}" }
+        failLog.log("BehaviorTrace")
         SourceResolveResult.Failure(attempts)
     }
 
     /**
      * 取不到播放地址时，按集号在下一个源里找同一集。
+     *
+     * 串行循环保持原样（ADR-0005 的后续动作另开卡）；关键词与候选排序顺带用上 [SearchQueries]
+     * 与 [TitleMatcher.rankCandidates]，与详情选源同一套规则。
      *
      * @param episodeNumber 已归一化的集号（[EpisodeNumber.canonical]）；`movie` 表示剧场版
      * @param aliases 同一部番的其他名字（内置别名表 + Bangumi 别名）
@@ -429,8 +492,9 @@ class SourceResolver @Inject constructor(
             return@withContext EpisodeResolveResult.Success(episode)
         }
 
-        "SOURCE switch failed from=$currentMode ep=$target attempts=" +
-            attempts.joinToString { "${it.mode}:${it.reason}" }.log("BehaviorTrace")
+        val failLog = "SOURCE switch failed from=$currentMode ep=$target attempts=" +
+            attempts.joinToString { "${it.mode}:${it.reason}" }
+        failLog.log("BehaviorTrace")
         EpisodeResolveResult.Failure(attempts)
     }
 
@@ -440,11 +504,12 @@ class SourceResolver @Inject constructor(
         val failures: List<SourceAttemptFailure>,
     )
 
-    /** 单个源的并发探测结果：成功带 [source]，失败带 [reason] */
+    /** 单个源的并发探测结果：成功带 [source]，失败带 [reason] 与 [diagnostics] */
     private class SourceAttempt(
         val mode: SourceMode,
         val source: ResolvedSource?,
         val reason: String?,
+        val diagnostics: MatchDiagnostics? = null,
     )
 
     /**
@@ -455,6 +520,7 @@ class SourceResolver @Inject constructor(
         batch: List<SourceMode>,
         queries: List<String>,
         aliases: List<String>,
+        expectedEpisodes: Int = 0,
         deadlineMillis: Long,
         onStart: (SourceMode) -> Unit,
     ): BatchOutcome = coroutineScope {
@@ -468,6 +534,7 @@ class SourceResolver @Inject constructor(
                         mode = mode,
                         queries = queries,
                         aliases = aliases,
+                        expectedEpisodes = expectedEpisodes,
                         remaining = deadlineMillis - System.currentTimeMillis(),
                     )
                 } catch (e: CancellationException) {
@@ -493,7 +560,11 @@ class SourceResolver @Inject constructor(
                 source = found
                 break
             }
-            failures += SourceAttemptFailure(attempt.mode, attempt.reason ?: "未知错误")
+            failures += SourceAttemptFailure(
+                attempt.mode,
+                attempt.reason ?: "未知错误",
+                attempt.diagnostics,
+            )
         }
 
         if (source != null) {
@@ -513,11 +584,19 @@ class SourceResolver @Inject constructor(
         queries: List<String>,
         aliases: List<String>,
         remaining: Long,
+        expectedEpisodes: Int = 0,
     ): SourceAttempt {
         if (remaining <= 0) return SourceAttempt(mode, null, "总预算耗尽")
+        val budget = minOf(PER_SOURCE_TIMEOUT_MS, remaining)
         return try {
-            val source = withTimeoutOrNull(minOf(PER_SOURCE_TIMEOUT_MS, remaining)) {
-                findSource(mode, queries, aliases)
+            val source = withTimeoutOrNull(budget) {
+                findSource(
+                    mode = mode,
+                    queries = queries,
+                    aliases = aliases,
+                    expectedEpisodes = expectedEpisodes,
+                    deadlineAt = System.currentTimeMillis() + budget,
+                )
             }
             if (source == null) {
                 SourceAttempt(mode, null, "超时")
@@ -526,34 +605,154 @@ class SourceResolver @Inject constructor(
             }
         } catch (e: CancellationException) {
             throw e
+        } catch (e: NoMatchingSourceException) {
+            SourceAttempt(mode, null, e.message ?: "没有匹配条目", e.diagnostics)
         } catch (e: Exception) {
             SourceAttempt(mode, null, e.message ?: e.javaClass.simpleName)
         }
     }
 
+    /**
+     * 单源找源：按 [SearchQueries] 的关键词顺序**串行**搜第 1 页，
+     * 第一个「可信候选 + 详情合格」的条目胜出；失败时带上结构化诊断抛 [NoMatchingSourceException]。
+     *
+     * 不并发、不翻页（用户 2026-10-22 拍板）：源内并发 2 实测更慢，翻页 76 次零收益还多 34% 请求。
+     * 串行下预算靠 [SourceProbeState.canProbeMore] 守住：没预算、验证次数用完、
+     * 或第 2 次验证前不足 [MIN_VERIFY_BUDGET_MS] 时立刻停手，不把请求花在来不及确认的候选上。
+     */
     private suspend fun findSource(
         mode: SourceMode,
         queries: List<String>,
         aliases: List<String>,
+        expectedEpisodes: Int = 0,
+        deadlineAt: Long = System.currentTimeMillis() + PER_SOURCE_TIMEOUT_MS,
     ): ResolvedSource {
-        var lastReason = "没有匹配条目"
+        val state = SourceProbeState(mode, aliases, expectedEpisodes, deadlineAt)
         for (query in queries) {
-            val results = animeApi.getSearchData(query, 1, mode)
-            val matchIndex = TitleMatcher.pickBest(query, results.map { it.title }, aliases)
-            if (matchIndex == null) {
-                lastReason = "搜索无匹配"
-                continue
-            }
-            val match = results[matchIndex]
-            val bean = animeApi.getAnimeDetail(match.url, mode)
-            val detail = toResolvedDetail(bean)
-            if (detail.episodes.isEmpty()) {
-                lastReason = "详情无剧集"
-                continue
-            }
-            return ResolvedSource(mode, match.url, detail.title, detail.episodes, detail)
+            if (!state.canProbeMore()) break
+            val source = probeQuery(state, query)
+            if (source != null) return source
         }
-        throw NoMatchingSourceException(lastReason)
+
+        val reason = state.lastReason ?: "没有匹配条目"
+        val failLog = "MATCH fail mode=${mode.name} queries=${state.queriesTried} " +
+            "candidates=${state.candidateCount} nearest=${state.nearestCandidate?.take(40) ?: "-"} " +
+            "reject=${state.rejectReason ?: "-"}"
+        failLog.log("BehaviorTrace")
+        throw NoMatchingSourceException(reason, state.diagnostics())
+    }
+
+    /**
+     * 一个关键词的一次探测（只取第 1 页）：搜索 → [TitleMatcher.rankCandidates] 打分排序 → 按分数顺序验证详情。
+     *
+     * 探测请求抛异常（403/验证码/网络）时**整源立刻失败**并把异常抛给上层：与改造前一致，
+     * 风控信号靠异常文本传给 [SourceRiskSignal] 触发降级，不会被吞成「搜索无匹配」。
+     */
+    private suspend fun probeQuery(state: SourceProbeState, query: String): ResolvedSource? {
+        val results = try {
+            animeApi.getSearchData(query, 1, state.mode)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // 搜索请求本身失败（403/验证码/网络）：也要留诊断，否则卡 §5-5「每个源都有诊断」不成立。
+            // 异常文本原样带进 reason，SourceRiskSignal 仍能识别风控并触发降级。
+            state.queriesTried += 1
+            val reason = e.message ?: e.javaClass.simpleName
+            state.setReason(reason)
+            state.rejectReason = "搜索请求失败"
+            val failLog = "MATCH fail mode=${state.mode.name} queries=${state.queriesTried} " +
+                "candidates=${state.candidateCount} nearest=- reject=搜索请求失败"
+            failLog.log("BehaviorTrace")
+            throw NoMatchingSourceException(reason, state.diagnostics())
+        }
+        state.queriesTried += 1
+        state.candidateCount += results.size
+
+        val ranked = TitleMatcher.rankCandidates(
+            target = query,
+            candidates = results.map { it.title },
+            aliases = state.aliases,
+        )
+        val picked = ranked.firstOrNull()
+        // 注意：必须先把整行拼好再 .log()——`"a" + "b".log()` 只会记录最后一段
+        val queryLog = "MATCH query=$query page=1 results=${results.size} " +
+            "picked=${picked?.title?.take(40) ?: "-"} score=${picked?.score ?: "-"}"
+        queryLog.log("BehaviorTrace")
+
+        if (picked == null) {
+            state.noteGenericReason("搜索无匹配")
+            // 「最接近」按归一化标题长度差取，避免把搜索结果第一条（可能完全无关）当诊断
+            val nearest = results.minByOrNull { bean ->
+                kotlin.math.abs(
+                    TitleMatcher.normalize(bean.title).length - TitleMatcher.normalize(query).length,
+                )
+            }
+            nearest?.let { state.noteReject(it.title, "候选不可信", trusted = false) }
+            return null
+        }
+        return verifyCandidates(state, results, query, ranked)
+    }
+
+    /**
+     * 按 [TitleMatcher.rankCandidates] 的分数顺序验证详情：详情标题必须再过一次门槛，
+     * 集数参与复核打分。每源最多 [MAX_DETAIL_VERIFICATIONS] 次，第 2 次前要求剩余预算
+     * ≥ [MIN_VERIFY_BUDGET_MS]；同一个详情地址不重复验证（同一个条目可能在多个关键词下都搜到）。
+     */
+    private suspend fun verifyCandidates(
+        state: SourceProbeState,
+        results: List<AnimeBean>,
+        query: String,
+        ranked: List<RankedCandidate>,
+    ): ResolvedSource? {
+        for ((index, candidate) in ranked.withIndex()) {
+            if (state.verifications >= MAX_DETAIL_VERIFICATIONS) return null
+            val rank = index + 1
+            if (state.verifications > 0 && state.budgetLeft() < MIN_VERIFY_BUDGET_MS) return null
+
+            val detailUrl = results[candidate.index].url
+            if (!state.markVerified(detailUrl)) continue
+            if (rank > 1) "MATCH verify fallback rank=$rank".log("BehaviorTrace")
+            state.verifications += 1
+
+            val bean = try {
+                animeApi.getAnimeDetail(detailUrl, state.mode)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                state.setReason(e.message ?: e.javaClass.simpleName)
+                state.noteReject(candidate.title, "详情请求失败", trusted = true)
+                "MATCH verify rank=$rank fail reason=详情请求失败".log("BehaviorTrace")
+                continue
+            }
+
+            val detail = toResolvedDetail(bean)
+            // 详情标题为空时退回搜索页标题，避免「标题空 → 归一化空 → 被判不可信」误杀
+            val detailTitle = detail.title.ifBlank { candidate.title }
+            val detailScore = TitleMatcher.score(
+                target = query,
+                candidate = detailTitle,
+                aliases = state.aliases,
+                episodeCount = detail.episodes.size,
+                expectedEpisodes = state.expectedEpisodes,
+                rank = candidate.index + 1,
+            )
+            if (detailScore == null) {
+                state.setReason("详情标题不符")
+                state.noteReject(candidate.title, "详情标题不符", trusted = true)
+                "MATCH verify rank=$rank fail reason=详情标题不符".log("BehaviorTrace")
+                continue
+            }
+            if (detail.episodes.isEmpty()) {
+                state.setReason("详情无剧集")
+                state.noteReject(candidate.title, "详情无剧集", trusted = true)
+                "MATCH verify rank=$rank fail reason=详情无剧集".log("BehaviorTrace")
+                continue
+            }
+            "MATCH verify rank=$rank ok title=$detailTitle score=$detailScore"
+                .log("BehaviorTrace")
+            return ResolvedSource(state.mode, detailUrl, detailTitle, detail.episodes, detail)
+        }
+        return null
     }
 
     private suspend fun findEpisode(
@@ -565,12 +764,13 @@ class SourceResolver @Inject constructor(
         var lastReason = "没有匹配条目"
         for (query in queries) {
             val results = animeApi.getSearchData(query, 1, mode)
-            val matchIndex = TitleMatcher.pickBest(query, results.map { it.title }, aliases)
-            if (matchIndex == null) {
+            val best = TitleMatcher.rankCandidates(query, results.map { it.title }, aliases)
+                .firstOrNull()
+            if (best == null) {
                 lastReason = "搜索无匹配"
                 continue
             }
-            val match = results[matchIndex]
+            val match = results[best.index]
             val detail = animeApi.getAnimeDetail(match.url, mode)
             val episodes = primaryEpisodes(detail).map { it.toEpisode() }
             if (episodes.isEmpty()) {
@@ -647,19 +847,79 @@ class SourceResolver @Inject constructor(
             .distinct()
 
     /**
-     * 搜索关键词：主标题、原名、别名；最多 4 条，避免一个源被大量别名搜索拖垮。
-     * 别名同时会传给 [TitleMatcher.pickBest] 做候选校验，所以多数情况第一条就能命中。
+     * 搜索关键词：交给 [SearchQueries] 按语言分流排序（中文标题 → 中文别名 → 拉丁别名 → 日文原名 → 其余），
+     * 上限 [MAX_QUERIES] 条，避免一个源被大量别名搜索拖垮。
+     * 别名同时会传给 [TitleMatcher.rankCandidates] 做候选校验，所以多数情况第一条就能命中。
      */
     private fun searchTitles(
         title: String,
         originalTitle: String,
         aliases: List<String>,
     ): List<String> =
-        (listOf(title.trim(), originalTitle.trim()) + aliases)
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .distinct()
-            .take(MAX_QUERIES)
+        SearchQueries.build(title, originalTitle, aliases, max = MAX_QUERIES)
 
-    private class NoMatchingSourceException(message: String) : Exception(message)
+    /** 源内探测的累计状态：诊断计数、验证次数、剩余预算；只在单源协程内使用 */
+    private class SourceProbeState(
+        val mode: SourceMode,
+        val aliases: List<String>,
+        val expectedEpisodes: Int,
+        private val deadlineAt: Long,
+    ) {
+        var queriesTried = 0
+        var candidateCount = 0
+        var verifications = 0
+        var lastReason: String? = null
+        var nearestCandidate: String? = null
+        var rejectReason: String? = null
+
+        private val verifiedUrls = mutableSetOf<String>()
+        private var nearestIsTrusted = false
+
+        fun budgetLeft(): Long = deadlineAt - System.currentTimeMillis()
+
+        /**
+         * 还能不能继续搜下一个关键词。三种情况再搜都是白花请求：
+         * 预算见底、详情验证次数已用完、第 2 次验证前的预算不够。
+         */
+        fun canProbeMore(): Boolean = when {
+            budgetLeft() <= 0 -> false
+            verifications >= MAX_DETAIL_VERIFICATIONS -> false
+            verifications > 0 && budgetLeft() < MIN_VERIFY_BUDGET_MS -> false
+            else -> true
+        }
+
+        /** 同一个详情地址只验证一次；返回 false 表示这次跳过 */
+        fun markVerified(url: String): Boolean = verifiedUrls.add(url)
+
+        /** 更具体的原因覆盖旧值（详情无剧集 / 详情标题不符 / 异常） */
+        fun setReason(reason: String) {
+            lastReason = reason
+        }
+
+        /** 泛化原因只在还没有更具体的原因时记录 */
+        fun noteGenericReason(reason: String) {
+            if (lastReason == null) lastReason = reason
+        }
+
+        /** 记「最接近的候选」：可信但详情不合格的优先于完全不可信的 */
+        fun noteReject(title: String, reason: String, trusted: Boolean) {
+            if (nearestCandidate == null || (trusted && !nearestIsTrusted)) {
+                nearestCandidate = title
+                rejectReason = reason
+                nearestIsTrusted = trusted
+            }
+        }
+
+        fun diagnostics(): MatchDiagnostics = MatchDiagnostics(
+            queriesTried = queriesTried,
+            candidateCount = candidateCount,
+            nearestCandidate = nearestCandidate,
+            rejectReason = rejectReason,
+        )
+    }
+
+    private class NoMatchingSourceException(
+        message: String,
+        val diagnostics: MatchDiagnostics? = null,
+    ) : Exception(message)
 }

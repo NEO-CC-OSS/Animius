@@ -212,6 +212,7 @@ class AnimeDetailViewModel @Inject constructor(
                     title = title,
                     originalTitle = item?.originalTitle.orEmpty(),
                     aliases = item?.aliases.orEmpty(),
+                    expectedEpisodes = item?.totalEpisodes ?: 0,
                     metadataId = metadataId,
                     currentMode = mode,
                     onProgress = ::onResolveProgress,
@@ -221,6 +222,7 @@ class AnimeDetailViewModel @Inject constructor(
                     title = title,
                     originalTitle = item?.originalTitle.orEmpty(),
                     aliases = item?.aliases.orEmpty(),
+                    expectedEpisodes = item?.totalEpisodes ?: 0,
                     metadataId = metadataId,
                     currentMode = mode,
                     onProgress = ::onResolveProgress,
@@ -237,13 +239,13 @@ class AnimeDetailViewModel @Inject constructor(
                         fromCache = result.fromCache,
                         metadataTitle = title,
                     )
-                    "DETAIL resolve ok id=$metadataId mode=${result.source.mode} " +
+                    val resolveOkLog = "DETAIL resolve ok id=$metadataId mode=${result.source.mode} " +
                         "cache=${result.fromCache} episodes=${result.source.episodes.size}"
-                        .log("BehaviorTrace")
-                    "DETAIL episodes ready id=$metadataId mode=${result.source.mode} " +
-                        "episodes=${result.source.episodes.size} " +
+                    resolveOkLog.log("BehaviorTrace")
+                    val episodesReadyLog = "DETAIL episodes ready id=$metadataId " +
+                        "mode=${result.source.mode} episodes=${result.source.episodes.size} " +
                         "elapsedMs=${skeletonShownAt?.let { System.currentTimeMillis() - it } ?: -1}"
-                        .log("BehaviorTrace")
+                    episodesReadyLog.log("BehaviorTrace")
                     loadResolvedDetail(result.source.detail)
                 }
 
