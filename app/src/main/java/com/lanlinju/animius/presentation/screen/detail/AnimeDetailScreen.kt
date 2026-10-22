@@ -144,13 +144,19 @@ fun AnimeDetailScreen(
     val scrollState = rememberScrollState()
     val bannerHeight = dimensionResource(Res.dimen.banner_height)
 
-    val animeDetailState by viewModel.animeDetailState.collectAsStateWithLifecycle()
+    val animeDetailState by viewModel.metadataDetailState.collectAsStateWithLifecycle()
     val isFavourite by viewModel.isFavourite.collectAsStateWithLifecycle()
     val sourceInfo by viewModel.sourceInfo.collectAsStateWithLifecycle()
+    // 显式骨架标志（M2）：不再用 episodes.isEmpty() 推断骨架——源站入口/手机的零剧集详情
+    // （Age 的 PV-only 线路、通道全空）也会是空剧集，那时必须保持原有剧集区逻辑
+    val isSkeleton by viewModel.isSkeleton.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    // 按「有没有骨架内容」分支：
+    // - 有骨架（TV 元数据详情）→ state 是 Success，下面直接渲染整页 + 剧集区占位；
+    // - 无骨架（源站入口 / 手机平板）→ 仍是 Loading 转圈 / Error 警告，行为与 tv.6 一致。
     StateHandler(
         state = animeDetailState,
         onLoading = { ResolvingIndicator(sourceInfo) },
@@ -225,10 +231,19 @@ fun AnimeDetailScreen(
 
                     val isTv = remember { isAndroidTV(context) }
 
+                    // 骨架态 detailUrl 还空着：此时收藏会写入 detailUrl="" 的 Favourite（从收藏页
+                    // 点开只带空地址 → metadataId=0、标题空 → 永久 Error），下载 sheet 也是空的。
+                    // 所以两个入口在骨架态禁用（灰显、位置不变），完整态行为不变。
+                    val canUseSourceActions =
+                        !isSkeleton && AnimeDetailState.canUseSourceActions(viewModel.detailUrl)
+
                     // TV 上进详情页：焦点落在"上次看的那集"按钮（无历史=第 1 集），
                     // 按确定即可直接续播；但焦点会把整页拖到剧集行，所以延迟把整页
                     // 滚回顶部——标题/封面信息照常可见，焦点位置不变（P2-2 用户方案）。
-                    LaunchedEffect(isTv) {
+                    // 剧集从空变非空时再滚一次：AnimeEpisodes 的 requestFocus 会 bringIntoView
+                    // 把页面从顶部拉到剧集行，不补这一下就会"先到顶部、几秒后又跳下去"。
+                    val hasEpisodes = animeDetail.episodes.isNotEmpty()
+                    LaunchedEffect(isTv, hasEpisodes) {
                         if (!isTv) return@LaunchedEffect
                         delay(500) // 等剧集按钮完成聚焦与 bringIntoView 滚动
                         runCatching { scrollState.scrollTo(0) }
@@ -236,6 +251,7 @@ fun AnimeDetailScreen(
 
                     TopAppBar(
                         detailUrl = viewModel.detailUrl,
+                        canDownload = canUseSourceActions,
                         onBackClick = onBackClick,
                         onDownloadClick = { showDownloadBottomSheet = true }
                     )
@@ -287,35 +303,60 @@ fun AnimeDetailScreen(
                         )
 
                         Box {
-                            AnimeEpisodes(
-                                episodes = animeDetail.episodes,
-                                lastPosition = animeDetail.lastPosition,
-                                contentPadding = PaddingValues(
-                                    start = dimensionResource(Res.dimen.large_padding) + if (
-                                        LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-                                    ) {
-                                        WindowInsets.displayCutout.asPaddingValues()
-                                            .calculateLeftPadding(LayoutDirection.Ltr)
-                                    } else 0.dp,
-                                    end = dimensionResource(Res.dimen.large_padding)
-                                ),
-                                reverseList = reverseList,
-                                onEpisodeClick = { index, episode ->
-                                    handleEpisodeSelection(
-                                        index, episode, animeDetail,
-                                        viewModel, scope, reverseList, onNavigateToVideoPlay
-                                    )
-                                }
+                            // M2：只认显式骨架标志。零剧集详情（源站入口 / 手机）episodes 也是空的，
+                            // 但那时不是骨架，必须继续走原剧集区（线路/反转/更多 不能消失）
+                            val showPlaceholder = AnimeDetailState.isEpisodePlaceholder(
+                                skeleton = isSkeleton,
+                                hasDetail = animeDetailState.data != null,
                             )
+                            if (showPlaceholder) {
+                                // 骨架态 / 选源失败：剧集区用可聚焦占位承接焦点，
+                                // 避免遥控器焦点落到返回按钮（用户 2026-10-21 的误触问题）
+                                EpisodeMatchPlaceholder(
+                                    state = sourceInfo,
+                                    contentPadding = PaddingValues(
+                                        start = dimensionResource(Res.dimen.large_padding) + if (
+                                            LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+                                        ) {
+                                            WindowInsets.displayCutout.asPaddingValues()
+                                                .calculateLeftPadding(LayoutDirection.Ltr)
+                                        } else 0.dp,
+                                        end = dimensionResource(Res.dimen.large_padding)
+                                    ),
+                                    onRetryClick = { viewModel.retry() },
+                                    onSearchClick = { onNavigateToSearchWithQuery(viewModel.searchTitle) },
+                                )
+                            } else {
+                                AnimeEpisodes(
+                                    episodes = animeDetail.episodes,
+                                    lastPosition = animeDetail.lastPosition,
+                                    contentPadding = PaddingValues(
+                                        start = dimensionResource(Res.dimen.large_padding) + if (
+                                            LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+                                        ) {
+                                            WindowInsets.displayCutout.asPaddingValues()
+                                                .calculateLeftPadding(LayoutDirection.Ltr)
+                                        } else 0.dp,
+                                        end = dimensionResource(Res.dimen.large_padding)
+                                    ),
+                                    reverseList = reverseList,
+                                    onEpisodeClick = { index, episode ->
+                                        handleEpisodeSelection(
+                                            index, episode, animeDetail,
+                                            viewModel, scope, reverseList, onNavigateToVideoPlay
+                                        )
+                                    }
+                                )
 
-                            EpisodeListControl(
-                                modifier = Modifier.align(Alignment.BottomEnd),
-                                channelIndex = animeDetail.channelIndex,
-                                isShowChannel = animeDetail.channels.size > 1,
-                                onReverseClick = { reverseList = !reverseList },
-                                onMoreClick = { showBottomSheet = true },
-                                onChannelClick = { showChannelSelectorDialog = true }
-                            )
+                                EpisodeListControl(
+                                    modifier = Modifier.align(Alignment.BottomEnd),
+                                    channelIndex = animeDetail.channelIndex,
+                                    isShowChannel = animeDetail.channels.size > 1,
+                                    onReverseClick = { reverseList = !reverseList },
+                                    onMoreClick = { showBottomSheet = true },
+                                    onChannelClick = { showChannelSelectorDialog = true }
+                                )
+                            }
                         }
 
                         // 元数据相关推荐点进同一条元数据链路；源站相关推荐保持原行为
@@ -365,7 +406,13 @@ fun AnimeDetailScreen(
                             }
                         )
 
-                        FavouriteIcon(isFavourite, animeDetail, viewModel)
+                        FavouriteIcon(
+                            isFavourite = isFavourite,
+                            animeDetail = animeDetail,
+                            viewModel = viewModel,
+                            // 骨架态 detailUrl 为空：写入的是坏收藏（点开进死路）→ 禁用但保留位置
+                            enabled = canUseSourceActions,
+                        )
                     }
 
                     if (showBottomSheet) {
@@ -488,6 +535,7 @@ private fun sourceLabel(state: SourceInfoState): String? = when (state) {
 @Composable
 private fun TopAppBar(
     detailUrl: String = "",
+    canDownload: Boolean = true,
     onBackClick: () -> Unit,
     onDownloadClick: () -> Unit,
 ) {
@@ -524,6 +572,8 @@ private fun TopAppBar(
                     onDismissRequest = { expanded = false }
                 ) {
                     DropdownMenuItem(
+                        // 骨架态没有 detailUrl：下载条目灰显不可点，避免打开空的下载 sheet
+                        enabled = canDownload,
                         text = { Text(stringResource(id = R.string.download)) },
                         onClick = {
                             expanded = false
@@ -568,6 +618,7 @@ private fun FavouriteIcon(
     isFavourite: Boolean,
     animeDetail: AnimeDetail,
     viewModel: AnimeDetailViewModel,
+    enabled: Boolean = true,
 ) {
     val context = LocalContext.current
     val msg = stringResource(
@@ -575,10 +626,11 @@ private fun FavouriteIcon(
     )
 
     IconButton(
+        enabled = enabled,
         modifier = Modifier.tvFocus(shape = CircleShape),
         colors = IconButtonDefaults.iconButtonColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
-                alpha = 0.45f
+                alpha = if (enabled) 0.45f else 0.2f
             )
         ),
         onClick = {
@@ -594,7 +646,12 @@ private fun FavouriteIcon(
         Icon(
             if (isFavourite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
             contentDescription = stringResource(id = Res.string.favourite),
-            tint = MaterialTheme.colorScheme.primary,
+            tint = if (enabled) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                // 骨架态灰显：保留位置不跳动，但明显不可点
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            },
         )
     }
 }
@@ -706,6 +763,129 @@ fun AnimeGenres(
                     borderColor = Color.Transparent
                 ),
             )
+        }
+    }
+}
+
+/**
+ * 剧集区占位（骨架态 / 选源失败）。
+ *
+ * 骨架态先渲染元数据页面，剧集还没到——此时页面上若没有可聚焦元素，TV 焦点会落到
+ * `TopAppBar` 的返回按钮上，用户下意识按 OK 会直接退出详情页（2026-10-21 用户提出）。
+ * 所以这里放一个**真正的 Button**：它内部的 clickable 本身就是焦点目标，按 OK 不导航、
+ * 不收藏，只把进度文案刷新一下（短暂高亮）。
+ *
+ * 红线：Button 内部不得再挂 `focusable`，否则双焦点、第一下确定被吞。
+ * 高度与真实剧集行一致（同样的 FilledTonalButton + bodyMedium + 垂直 small_padding），
+ * 剧集出现时页面不跳动；剧集出现后本占位消失，由 `AnimeEpisodes` 按 `lastPosition` 聚焦。
+ */
+@Composable
+private fun EpisodeMatchPlaceholder(
+    state: SourceInfoState,
+    contentPadding: PaddingValues,
+    onRetryClick: () -> Unit,
+    onSearchClick: () -> Unit,
+) {
+    val context = LocalContext.current
+    val isTv = remember { isAndroidTV(context) }
+    val failed = state is SourceInfoState.Failed
+    val focusRequester = remember { FocusRequester() }
+
+    // 骨架态焦点必须落在剧集区；失败态换到「重试」按钮上，同样不停在返回按钮
+    LaunchedEffect(failed) {
+        if (!isTv) return@LaunchedEffect
+        delay(100)
+        runCatching { focusRequester.requestFocus() }
+    }
+
+    if (failed) {
+        Column(
+            modifier = Modifier.padding(contentPadding),
+            verticalArrangement = Arrangement.spacedBy(dimensionResource(Res.dimen.small_padding)),
+        ) {
+            Text(
+                text = stringResource(
+                    Res.string.source_matching_placeholder_failed,
+                    (state as SourceInfoState.Failed).reason,
+                ),
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.bodyMedium,
+                // 卡 §5-6：每个源的原因都要能看到。6 个源（如「Skr: 搜索无匹配；…」）在
+                // 电视上约 3 行，原来 maxLines=3 会被省略号截掉后几个源
+                maxLines = 6,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(dimensionResource(Res.dimen.small_padding)),
+            ) {
+                TextButton(
+                    modifier = Modifier
+                        .tvFocus(shape = CircleShape)
+                        .focusRequester(focusRequester),
+                    onClick = onRetryClick,
+                ) {
+                    Text(text = stringResource(Res.string.retry))
+                }
+                TextButton(
+                    modifier = Modifier.tvFocus(shape = CircleShape),
+                    onClick = onSearchClick,
+                ) {
+                    Text(text = stringResource(Res.string.source_search_manually))
+                }
+            }
+        }
+    } else {
+        var flash by remember { mutableStateOf(false) }
+        LaunchedEffect(flash) {
+            if (flash) {
+                delay(600)
+                flash = false
+            }
+        }
+
+        val label = when (state) {
+            is SourceInfoState.ResolvingConcurrent -> stringResource(
+                Res.string.source_resolving_concurrent,
+                state.concurrency,
+                state.tried,
+                state.total,
+            )
+
+            is SourceInfoState.Resolving -> if (state.total > 0) {
+                stringResource(Res.string.source_matching_placeholder, state.index, state.total)
+            } else {
+                stringResource(Res.string.source_matching_placeholder_start)
+            }
+
+            else -> stringResource(Res.string.source_matching_placeholder_start)
+        }
+
+        Row(modifier = Modifier.padding(contentPadding)) {
+            FilledTonalButton(
+                // 按 OK 只刷新进度文案（短暂高亮），不导航、不收藏
+                onClick = { flash = true },
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(
+                        alpha = if (flash) 0.85f else 0.5f
+                    )
+                ),
+                modifier = Modifier.run {
+                    if (isTv) {
+                        tvFocus(shape = CircleShape)
+                            .clip(CircleShape)
+                            .focusRequester(focusRequester)
+                    } else this
+                }
+            ) {
+                Text(
+                    text = label,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(
+                        vertical = dimensionResource(Res.dimen.small_padding)
+                    )
+                )
+            }
         }
     }
 }

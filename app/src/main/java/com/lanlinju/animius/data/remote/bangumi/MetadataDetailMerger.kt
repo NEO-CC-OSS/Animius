@@ -12,21 +12,34 @@ import com.lanlinju.animius.domain.model.AnimeDetail
  */
 object MetadataDetailMerger {
 
+    /**
+     * 骨架详情：只用本地元数据构造首帧内容，**不产生任何源站请求**。
+     *
+     * 剧集列表、线路、历史进度只能来自源站，骨架态一律为空/0（[AnimeDetail.lastPosition] = 0）。
+     * 封面三级回退字段（主图/备用/回退/LQIP）原样带上，骨架态也能立刻显示封面。
+     *
+     * @param fallbackTitle 元数据标题为空时的兜底（路由标题），与 [merge] 的 `ifBlank` 口径一致，
+     *   避免极低概率的空白标题让骨架页顶部空一块
+     */
+    fun skeleton(meta: MetadataItem, fallbackTitle: String = ""): AnimeDetail = AnimeDetail(
+        title = meta.title.ifBlank { fallbackTitle },
+        img = meta.image,
+        desc = meta.summary,
+        tags = meta.tags,
+        lastPosition = 0,
+        episodes = emptyList(),
+        relatedAnimes = relatedOf(meta),
+        channelIndex = 0,
+        channels = emptyMap(),
+        imgBackup = meta.imageBackup,
+        imgFallback = meta.imageFallback,
+        imgLqip = meta.lqip,
+    )
+
     fun merge(detail: AnimeDetail, meta: MetadataItem?): AnimeDetail {
         if (meta == null) return detail
         val related = if (meta.related.isNotEmpty()) {
-            meta.related.map {
-                Anime(
-                    title = it.title,
-                    img = it.image,
-                    detailUrl = "",
-                    episodeName = "",
-                    metadataId = it.id,
-                    imgBackup = it.imageBackup,
-                    imgFallback = it.imageFallback,
-                    lqip = it.lqip,
-                )
-            }
+            relatedOf(meta)
         } else {
             detail.relatedAnimes
         }
@@ -39,6 +52,20 @@ object MetadataDetailMerger {
             imgBackup = meta.imageBackup.ifBlank { detail.imgBackup },
             imgFallback = meta.imageFallback.ifBlank { detail.imgFallback },
             imgLqip = meta.lqip.ifBlank { detail.imgLqip },
+        )
+    }
+
+    /** 元数据相关推荐 → 详情页卡片模型（点击按 metadataId 走元数据链路） */
+    private fun relatedOf(meta: MetadataItem): List<Anime> = meta.related.map {
+        Anime(
+            title = it.title,
+            img = it.image,
+            detailUrl = "",
+            episodeName = "",
+            metadataId = it.id,
+            imgBackup = it.imageBackup,
+            imgFallback = it.imageFallback,
+            lqip = it.lqip,
         )
     }
 }

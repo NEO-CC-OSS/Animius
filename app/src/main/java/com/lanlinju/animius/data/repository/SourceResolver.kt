@@ -8,12 +8,17 @@ import com.lanlinju.animius.domain.matching.TitleMatcher
 import com.lanlinju.animius.domain.model.AnimeDetail
 import com.lanlinju.animius.domain.model.Episode
 import com.lanlinju.animius.util.SourceMode
+import com.lanlinju.animius.util.SourceRiskSignal
 import com.lanlinju.animius.util.log
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -41,7 +46,13 @@ data class ResolvedEpisode(
 
 data class SourceAttemptFailure(val mode: SourceMode, val reason: String)
 
-data class ResolveProgress(val index: Int, val total: Int, val mode: SourceMode)
+data class ResolveProgress(
+    val index: Int,
+    val total: Int,
+    val mode: SourceMode,
+    /** 同时在飞的源数量；1 表示串行（风控降级后也会回到 1） */
+    val concurrency: Int = 1,
+)
 
 sealed interface SourceResolveResult {
     data class Success(val source: ResolvedSource, val fromCache: Boolean) : SourceResolveResult
@@ -84,6 +95,21 @@ class SourceResolver @Inject constructor(
 
         /** 每个源最多尝试的搜索关键词数（主标题 + 原名 + 别名） */
         private const val MAX_QUERIES = 4
+
+        /** 并发选源默认上限：当前源 + 2 个兜底同时试（用户 2026-10-21 拍板） */
+        const val DEFAULT_CONCURRENCY = 3
+
+        /**
+         * 并发路径的总预算（卡 §5「最坏 ≤20s」）。
+         *
+         * 结构性最坏：6 个候选 / 3 并发 = 2 批 × 每源 [PER_SOURCE_TIMEOUT_MS] 12s = 24s，
+         * 会超出验收上限。所以并发路径单独收口到 20s：第 1 批最多 12s，第 2 批只剩 8s，
+         * 不足即记「总预算耗尽」。串行 [resolve] 仍用 [OVERALL_TIMEOUT_MS]（45s），行为不变。
+         */
+        const val CONCURRENT_OVERALL_TIMEOUT_MS = 20_000L
+
+        /** 连续风控（403/验证码）达到这个数就降一档并发：3 → 2 → 串行 */
+        const val RISK_DEGRADE_STREAK = 2
 
         /** 固定兜底顺序：稳定源在前，已知长期故障的源放最后 */
         private val FALLBACK_ORDER = listOf(
@@ -218,6 +244,132 @@ class SourceResolver @Inject constructor(
     }
 
     /**
+     * 并发选源：候选源按 [maxConcurrency] 分批同时探测，先成功者胜、其余取消。
+     *
+     * 与 [resolve] 的区别只在「怎么试」：缓存命中路径仍在最前（串行快速路径，只发一次详情请求）；
+     * 并发失败（全部源都不可用）时 attempts 与串行一致，完整列出每个源的原因。
+     *
+     * 风控降级：一批源**全部失败**且其中风控类（403/验证码）失败达到 [RISK_DEGRADE_STREAK] 个时，
+     * 累计连续风控数，达到阈值就把并发上限降一档（3 → 2 → 1 串行）；`NoMatchingSource`
+     * （搜索无匹配/详情无剧集）不算风控，冷门番不会因为找不到而变慢。
+     * 只要求「批内风控失败 ≥2」而不是「整批全是风控」——否则 2 个 403 混 1 个超时就会被清零，
+     * 与卡里「连续出现 403/验证码」的口径不符。
+     *
+     * @param maxConcurrency 并发上限，默认 [DEFAULT_CONCURRENCY]；1 等价于串行
+     * @param deadlineMillis 整轮并发探测的总预算，默认 [CONCURRENT_OVERALL_TIMEOUT_MS]（20s）
+     * @param onProgress 每启动一个源回调一次；`index` = 已启动的源数，`concurrency` = 当前并发档位
+     */
+    suspend fun resolveConcurrent(
+        title: String,
+        originalTitle: String = "",
+        aliases: List<String> = emptyList(),
+        metadataId: Long = 0,
+        currentMode: SourceMode,
+        exclude: Set<SourceMode> = emptySet(),
+        now: Instant = Instant.now(),
+        deadlineMillis: Long = System.currentTimeMillis() + CONCURRENT_OVERALL_TIMEOUT_MS,
+        maxConcurrency: Int = DEFAULT_CONCURRENCY,
+        onProgress: (ResolveProgress) -> Unit = {},
+    ): SourceResolveResult = withContext(Dispatchers.IO) {
+        val allAliases = mergeAliases(title, aliases)
+        val queries = searchTitles(title, originalTitle, allAliases)
+        if (queries.isEmpty()) {
+            return@withContext SourceResolveResult.Failure(
+                listOf(SourceAttemptFailure(currentMode, "标题为空"))
+            )
+        }
+
+        val key = cacheKey(metadataId, title)
+        val attempts = mutableListOf<SourceAttemptFailure>()
+
+        // 1) 缓存命中仍走串行快速路径，且必须排在并发之前（只发一次详情请求）
+        val cached = matchStore.get(key, now)
+        if (cached != null && cached.mode !in exclude) {
+            val fromCache = try {
+                withTimeoutOrNull(PER_SOURCE_TIMEOUT_MS) { loadCached(cached) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            if (fromCache != null) {
+                "SOURCE resolve cache=hit key=$key mode=${cached.mode} title=${cached.siteTitle}"
+                    .log("BehaviorTrace")
+                return@withContext SourceResolveResult.Success(fromCache, fromCache = true)
+            }
+            matchStore.remove(key)
+            attempts += SourceAttemptFailure(cached.mode, "缓存详情失效")
+        }
+
+        // 2) 有界并发：一批最多 concurrency 个源同时试
+        val modes = candidates(currentMode, exclude)
+        var concurrency = maxConcurrency.coerceAtLeast(1)
+        var riskStreak = 0
+        var cursor = 0
+        val started = AtomicInteger(0)
+
+        while (cursor < modes.size) {
+            val remaining = deadlineMillis - System.currentTimeMillis()
+            if (remaining <= 0) {
+                modes.drop(cursor).forEach { attempts += SourceAttemptFailure(it, "总预算耗尽") }
+                break
+            }
+
+            val batch = modes.subList(cursor, minOf(cursor + concurrency, modes.size)).toList()
+            cursor += batch.size
+            val batchConcurrency = concurrency
+
+            val outcome = resolveBatch(
+                batch = batch,
+                queries = queries,
+                aliases = allAliases,
+                deadlineMillis = deadlineMillis,
+                onStart = { mode ->
+                    onProgress(
+                        ResolveProgress(
+                            index = started.incrementAndGet(),
+                            total = modes.size,
+                            mode = mode,
+                            concurrency = batchConcurrency,
+                        )
+                    )
+                },
+            )
+            attempts += outcome.failures
+
+            val source = outcome.source
+            if (source != null) {
+                matchStore.put(
+                    key,
+                    SourceMatch(source.mode, source.detailUrl, source.siteTitle, now),
+                )
+                "SOURCE resolve ok key=$key mode=${source.mode} title=${source.siteTitle} " +
+                    "episodes=${source.episodes.size} concurrency=$concurrency"
+                    .log("BehaviorTrace")
+                return@withContext SourceResolveResult.Success(source, fromCache = false)
+            }
+
+            // 3) 风控降级：本批无成功（走到这里就说明没有成功源）且风控失败 ≥2 才算「连续风控」；
+            //    2 个 403 混 1 个超时同样累计，不再被整批口径清零
+            val riskFailures = outcome.failures.count { SourceRiskSignal.isRiskControl(it.reason) }
+            if (riskFailures >= RISK_DEGRADE_STREAK) {
+                riskStreak += riskFailures
+                if (concurrency > 1) {
+                    concurrency = maxOf(1, concurrency - 1)
+                    "SOURCE concurrent degrade concurrency=$concurrency riskStreak=$riskStreak"
+                        .log("BehaviorTrace")
+                }
+            } else {
+                riskStreak = 0
+            }
+        }
+
+        "SOURCE resolve failed key=$key attempts=" +
+            attempts.joinToString { "${it.mode}:${it.reason}" }.log("BehaviorTrace")
+        SourceResolveResult.Failure(attempts)
+    }
+
+    /**
      * 取不到播放地址时，按集号在下一个源里找同一集。
      *
      * @param episodeNumber 已归一化的集号（[EpisodeNumber.canonical]）；`movie` 表示剧场版
@@ -280,6 +432,103 @@ class SourceResolver @Inject constructor(
         "SOURCE switch failed from=$currentMode ep=$target attempts=" +
             attempts.joinToString { "${it.mode}:${it.reason}" }.log("BehaviorTrace")
         EpisodeResolveResult.Failure(attempts)
+    }
+
+    /** 一批并发源的结果：成功源（若本批有）与每个失败源的原因 */
+    private class BatchOutcome(
+        val source: ResolvedSource?,
+        val failures: List<SourceAttemptFailure>,
+    )
+
+    /** 单个源的并发探测结果：成功带 [source]，失败带 [reason] */
+    private class SourceAttempt(
+        val mode: SourceMode,
+        val source: ResolvedSource?,
+        val reason: String?,
+    )
+
+    /**
+     * 一批源同时探测：谁先成功谁胜，成功后取消本批其余仍在飞的请求。
+     * 全部失败时返回每个源的失败原因（attempts 完整，供 UI 展示与「去搜索」判断）。
+     */
+    private suspend fun resolveBatch(
+        batch: List<SourceMode>,
+        queries: List<String>,
+        aliases: List<String>,
+        deadlineMillis: Long,
+        onStart: (SourceMode) -> Unit,
+    ): BatchOutcome = coroutineScope {
+        val outcomes = Channel<SourceAttempt>(Channel.UNLIMITED)
+        val jobs = batch.associateWith { mode ->
+            launch(Dispatchers.IO) {
+                var attempt = SourceAttempt(mode, null, "探测异常")
+                try {
+                    onStart(mode)
+                    attempt = attemptSource(
+                        mode = mode,
+                        queries = queries,
+                        aliases = aliases,
+                        remaining = deadlineMillis - System.currentTimeMillis(),
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // onStart（UI 进度回调）或探测本身抛异常也要回传结果，
+                    // 否则 receive() 会永久挂起（trySend 在 finally 里兜底）
+                    attempt = SourceAttempt(mode, null, e.message ?: e.javaClass.simpleName)
+                } finally {
+                    outcomes.trySend(attempt)
+                }
+            }
+        }
+
+        val failures = mutableListOf<SourceAttemptFailure>()
+        var source: ResolvedSource? = null
+        var received = 0
+        while (received < batch.size) {
+            val attempt = outcomes.receive()
+            received += 1
+            val found = attempt.source
+            if (found != null) {
+                source = found
+                break
+            }
+            failures += SourceAttemptFailure(attempt.mode, attempt.reason ?: "未知错误")
+        }
+
+        if (source != null) {
+            // 只统计真正还在飞的：胜出的那个 job 可能尚未结束（isActive=true），不能算进 remaining
+            val cancelled = jobs.count { (mode, job) -> job.isActive && mode != source.mode }
+            jobs.values.forEach { it.cancel() }
+            if (cancelled > 0) {
+                "SOURCE concurrent cancel remaining=$cancelled".log("BehaviorTrace")
+            }
+        }
+        BatchOutcome(source, failures)
+    }
+
+    /** 单源探测：预算取「单源预算」与「整体剩余」的较小值，超时/异常都转成失败原因 */
+    private suspend fun attemptSource(
+        mode: SourceMode,
+        queries: List<String>,
+        aliases: List<String>,
+        remaining: Long,
+    ): SourceAttempt {
+        if (remaining <= 0) return SourceAttempt(mode, null, "总预算耗尽")
+        return try {
+            val source = withTimeoutOrNull(minOf(PER_SOURCE_TIMEOUT_MS, remaining)) {
+                findSource(mode, queries, aliases)
+            }
+            if (source == null) {
+                SourceAttempt(mode, null, "超时")
+            } else {
+                SourceAttempt(mode, source, null)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            SourceAttempt(mode, null, e.message ?: e.javaClass.simpleName)
+        }
     }
 
     private suspend fun findSource(

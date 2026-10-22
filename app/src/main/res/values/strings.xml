@@ -172,4 +172,10 @@
     <string name="source_switching">正在切换播放源…</string>
     <string name="source_switched">已切换到 %1$s</string>
     <string name="source_switch_failed">换源失败：%1$s</string>
+
+    <!-- tv.8 切片 2：骨架态剧集区占位（并发匹配进度 / 失败原因） -->
+    <string name="source_resolving_concurrent">正在同时匹配 %1$d 个源（已试 %2$d/%3$d）</string>
+    <string name="source_matching_placeholder">正在匹配源…（已试 %1$d/共 %2$d）</string>
+    <string name="source_matching_placeholder_start">正在匹配源…</string>
+    <string name="source_matching_placeholder_failed">没有匹配到可用源：%1$s</string>
 </resources>
