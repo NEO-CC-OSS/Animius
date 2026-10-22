@@ -1203,7 +1203,9 @@ jobs:
           cd prev
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          cp -f ../calendar.json calendar.json
+          # 旧包 calendar.json 已下线（2026-10-22）：不再发布，并清掉分支上的残留。
+          # 客户端仍有本地旧缓存兜底；metadata 分支只保留 index.json + covers。
+          rm -f calendar.json
           cp -f ../index.json index.json
           mkdir -p covers
           if [ -n "$(find ../covers -maxdepth 1 -name '*.webp' -print -quit)" ]; then
