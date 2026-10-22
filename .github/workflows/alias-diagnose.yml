@@ -1,0 +1,100 @@
+name: alias-diagnose
+
+# 临时诊断 workflow（tv.8 切片 3a）：只手动触发，抓 Bangumi subject 原样 infobox，
+# 用于判断「站点另一种中文译名」是否存在于 infobox 中、在哪个键。
+# 不产出 index.json，不改任何产物；复核后由维护者决定是否删除。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fetch subject infobox (stdlib only)
+        run: |
+          python3 - <<'PY'
+          import json
+          import time
+          import urllib.request
+
+          # 11 部「同一部番、站点用另一种中文译名」的未命中样本 + 5 部哨兵
+          IDS = [
+              701779,  # マゼンチュ                    <-> 站点「洋红色」
+              637206,  # しろたん                      <-> 站点「海豹小白」
+              661278,  # ゆるゆる図鑑                  <-> 站点「悠悠哉哉图鉴」
+              694622,  # ねずみくんのチョッキ 第2期     <-> 站点「鼠小弟的小背心 第2期」
+              617273,  # ケロロ軍曹☆                   <-> 站点「青蛙军曹☆」
+              637802,  # らんま1/2 第3期               <-> 站点「新 乱马1/2 第3期」
+              559080,  # Dreamland                     <-> 站点「梦境乐园」
+              646586,  # ぷにるんず ぷに４              <-> 站点「噗尼轮轮4」
+              700127,  # ちょこっとヤバシティ          <-> 站点「Chocot Yabacity」
+              704737,  # シルバニアファミリー …        <-> 站点「…（无空格）」
+              712926,  # 都市古医仙2                   <-> 站点「大陆剧都市古医仙2026」
+              # 哨兵（已知可命中的对照组）
+              975,     # ONE PIECE / 航海王
+              636023,  # TANK CHAIR / 战车椅子
+              657084,  # マロニエ王国の七人の騎士 / 七叶树王国的七名骑士
+              511936,  # ロメリア戦記 / 罗梅莉亚战记
+              614640,  # PSYREN
+          ]
+
+          API = "https://api.bgm.tv/v0/subjects/{}"
+          UA = "AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius)"
+
+
+          def fetch(sid):
+              req = urllib.request.Request(
+                  API.format(sid),
+                  headers={"User-Agent": UA, "Accept": "application/json"},
+              )
+              with urllib.request.urlopen(req, timeout=25) as resp:
+                  return json.loads(resp.read().decode("utf-8"))
+
+
+          rows = []
+          for sid in IDS:
+              rec = {"id": sid, "ok": False}
+              for attempt in (1, 2):
+                  try:
+                      data = fetch(sid)
+                      rec.update({
+                          "ok": True,
+                          "name": data.get("name"),
+                          "name_cn": data.get("name_cn"),
+                          "infobox": data.get("infobox"),
+                          "summary_head": (data.get("summary") or "")[:80],
+                      })
+                      break
+                  except Exception as exc:
+                      rec["error"] = "{}: {}".format(type(exc).__name__, exc)
+                      if attempt == 1:
+                          time.sleep(1.0)
+              rows.append(rec)
+              time.sleep(0.4)
+
+          with open("alias_diag.json", "w", encoding="utf-8") as fh:
+              json.dump(rows, fh, ensure_ascii=False, indent=1)
+
+          ok = sum(1 for r in rows if r["ok"])
+          print("fetched {}/{} subjects".format(ok, len(IDS)))
+          keys = {}
+          for r in rows:
+              for item in r.get("infobox") or []:
+                  if isinstance(item, dict):
+                      keys[item.get("key")] = keys.get(item.get("key"), 0) + 1
+          print("infobox keys:", json.dumps(keys, ensure_ascii=False, sort_keys=True))
+          PY
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alias-diag
+          path: alias_diag.json
+          if-no-files-found: warn
+          retention-days: 14
