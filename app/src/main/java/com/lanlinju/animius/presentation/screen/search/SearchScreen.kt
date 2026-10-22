@@ -1,6 +1,5 @@
 package com.lanlinju.animius.presentation.screen.search
 
-
 import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -8,21 +7,17 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Clear
-import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -45,21 +40,23 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.paging.compose.collectAsLazyPagingItems
 import com.lanlinju.animius.R
+import com.lanlinju.animius.data.repository.AggregateGroup
 import com.lanlinju.animius.presentation.component.MediaSmall
-import com.lanlinju.animius.presentation.component.PaginationStateHandler
-import com.lanlinju.animius.presentation.component.WarningMessage
-import com.lanlinju.animius.presentation.component.tvFocus
 import com.lanlinju.animius.presentation.screen.captcha.CaptchaWebViewActivity
 import com.lanlinju.animius.util.SourceMode
 import com.lanlinju.animius.util.isAndroidTV
-import com.lanlinju.animius.util.isWideScreen
 
+/**
+ * 搜索页（tv.9 切片 3）：搜索是兜底，一次搜全部可用源，按源分组展示。
+ *
+ * 只显示源站结果；不显示元数据搜索结果（用户 2026-10-22 拍板）。
+ * 每个源单独一组：搜索中 / 超时不可用 / 无结果 / 结果列表。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(
@@ -67,36 +64,33 @@ fun SearchScreen(
     onBackClick: () -> Unit,
     initialQuery: String = "",
 ) {
-
     val viewModel = hiltViewModel<SearchViewModel>()
-    val animesState = viewModel.animesState.collectAsLazyPagingItems()
+    val groups by viewModel.groups.collectAsState()
+    val isSearching by viewModel.isSearching.collectAsState()
     val searchQuery by viewModel.query.collectAsState()
     val needCaptchaUrl by viewModel.needCaptchaUrl.collectAsState()
-    var menuExpanded by remember { mutableStateOf(false) }
+    var searchBarExpanded by rememberSaveable { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
-    var searchBarExpanded by rememberSaveable { mutableStateOf(false) }
-    // 从周表元数据点进来时带标题预填并直接搜索；只消费一次。
-    // 标志放在 ViewModel 里：旋转/从详情返回不会重复预填；进程重建后 ViewModel 重建，仍能恢复。
+    val context = LocalContext.current
+
+    // 从周表/详情点进来时带标题预填并直接搜全部源；只消费一次
     LaunchedEffect(initialQuery) {
         if (!viewModel.initialQueryConsumed && initialQuery.isNotBlank()) {
             viewModel.initialQueryConsumed = true
             if (viewModel.query.value.isBlank()) {
                 searchBarExpanded = true
-                viewModel.onQuery(initialQuery)
-                viewModel.onSearch(initialQuery, viewModel.currentSourceMode)
+                viewModel.searchAll(initialQuery)
             }
         }
     }
 
-    val context = LocalContext.current
     val captchaLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            // 验证码验证完成，重新搜索
             viewModel.clearNeedCaptcha()
-            viewModel.getSearchData(searchQuery, viewModel.currentSourceMode)
+            viewModel.searchAll(searchQuery)
         }
     }
 
@@ -119,9 +113,7 @@ fun SearchScreen(
                 }
             },
             dismissButton = {
-                TextButton(
-                    onClick = { viewModel.clearNeedCaptcha() }
-                ) {
+                TextButton(onClick = { viewModel.clearNeedCaptcha() }) {
                     Text("取消")
                 }
             }
@@ -136,7 +128,7 @@ fun SearchScreen(
                     onQueryChange = viewModel::onQuery,
                     onSearch = {
                         searchBarExpanded = true
-                        viewModel.onSearch(it, viewModel.currentSourceMode)
+                        viewModel.searchAll(it)
                         keyboardController?.hide()
                     },
                     expanded = searchBarExpanded,
@@ -153,49 +145,13 @@ fun SearchScreen(
                         }
                     },
                     trailingIcon = {
-                        Row {
-                            IconButton(onClick = viewModel::clearSearchQuery) {
-                                Icon(imageVector = Icons.Rounded.Clear, contentDescription = stringResource(id = R.string.clear))
-                            }
-                            Box {
-                                IconButton(onClick = { menuExpanded = true }) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.MoreVert,
-                                        contentDescription = stringResource(id = R.string.more)
-                                    )
-                                }
-
-                                DropdownMenu(
-                                    expanded = menuExpanded,
-                                    onDismissRequest = { menuExpanded = false }
-                                ) {
-
-                                    SourceMode.entries.forEach { mode ->
-                                        DropdownMenuItem(
-                                            text = {
-                                                Column {
-                                                    Text(
-                                                        text = mode.name,
-                                                        color = if (viewModel.currentSourceMode == mode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                                    )
-                                                    Text(
-                                                        text = mode.summary,
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    )
-                                                }
-                                            },
-                                            onClick = {
-                                                menuExpanded = false
-                                                viewModel.currentSourceMode = mode
-                                                viewModel.getSearchData(searchQuery, mode)
-                                            },
-                                        )
-                                    }
-                                }
-                            }
+                        IconButton(onClick = viewModel::clearSearchQuery) {
+                            Icon(
+                                imageVector = Icons.Rounded.Clear,
+                                contentDescription = stringResource(id = R.string.clear)
+                            )
                         }
-                    },
+                    }
                 )
             },
             modifier = Modifier
@@ -204,68 +160,11 @@ fun SearchScreen(
             expanded = searchBarExpanded,
             onExpandedChange = { if (!it) onBackClick() },
         ) {
-            val context = LocalContext.current
-            val isAndroidTV = isAndroidTV(LocalContext.current)
-
-            LazyVerticalGrid(
-                columns = if (isWideScreen(context)) GridCells.Adaptive(dimensionResource(R.dimen.media_card_width)) else GridCells.Fixed(
-                    3
-                ),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(8.dp),
-            ) {
-                items(count = animesState.itemCount) { index ->
-                    val mediaFocusRequester = remember { FocusRequester() }
-                    val item = animesState[index]!!
-                    MediaSmall(
-                        image = item.img,
-                        label = item.title,
-                        onClick = {
-                            onNavigateToAnimeDetail(item.detailUrl, viewModel.currentSourceMode)
-                        },
-                        // 不得再外挂 .focusable()：MediaSmall 内部 combinedClickable 已是焦点目标，
-                        // 重复挂会把第一下确定吃掉（同方案 P1-5）；tvFocus 已内置在 MediaSmall，
-                        // 调用处再挂一次会画出两圈框
-                        modifier = Modifier
-                            .focusRequester(mediaFocusRequester) // 设置焦点请求者
-                    )
-
-                    LaunchedEffect(item.detailUrl) {
-                        if (index == 0 && isAndroidTV) {
-                            mediaFocusRequester.requestFocus() // 将焦点移动到 MediaSmall
-                        }
-                    }
-                }
-
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    PaginationStateHandler(
-                        paginationState = animesState,
-                        loadingComponent = {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(
-                                        vertical = dimensionResource(
-                                            id = R.dimen.medium_padding
-                                        )
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                CircularProgressIndicator()
-                            }
-                        },
-                        errorComponent = {
-                            WarningMessage(
-                                textId = R.string.txt_empty_result,
-                                onRetryClick = {
-                                    animesState.retry()
-                                }
-                            )
-                        }
-                    )
-                }
-            }
+            SearchResults(
+                groups = groups,
+                isSearching = isSearching,
+                onItemClick = onNavigateToAnimeDetail,
+            )
         }
     }
 
@@ -274,7 +173,100 @@ fun SearchScreen(
             viewModel.hasFocusRequest = true
             focusRequester.requestFocus()
         }
-
     }
 }
 
+@Composable
+private fun SearchResults(
+    groups: List<AggregateGroup>,
+    isSearching: Boolean,
+    onItemClick: (String, SourceMode) -> Unit,
+) {
+    if (groups.isEmpty()) {
+        if (isSearching) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = stringResource(id = R.string.txt_empty_result),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+        }
+        return
+    }
+
+    val isTv = isAndroidTV(LocalContext.current)
+    val firstItemFocus = remember { FocusRequester() }
+    val firstGroup = groups.firstOrNull { it.results.isNotEmpty() }
+    // 结果首次出现时把焦点送到第一个结果（TV 遥控器从搜索框按 DOWN 不一定进得来）
+    LaunchedEffect(firstGroup) {
+        if (isTv && firstGroup != null) {
+            runCatching { firstItemFocus.requestFocus() }
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        groups.forEach { group ->
+            item(key = "header-${group.mode.name}") {
+                SourceGroupHeader(group = group, isSearching = isSearching)
+            }
+            if (group.results.isNotEmpty()) {
+                item(key = "row-${group.mode.name}") {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(horizontal = 4.dp),
+                    ) {
+                        itemsIndexed(
+                            items = group.results,
+                            key = { _, item -> "${group.mode.name}-${item.url}" },
+                        ) { index, item ->
+                            val isFirst = group.mode == firstGroup?.mode && index == 0
+                            MediaSmall(
+                                image = item.img,
+                                label = item.title,
+                                onClick = { onItemClick(item.url, group.mode) },
+                                modifier = if (isFirst) {
+                                    Modifier.focusRequester(firstItemFocus)
+                                } else {
+                                    Modifier
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 组标题：源名 + 该组状态（搜索中 / 超时 / 无结果 / N 个结果） */
+@Composable
+private fun SourceGroupHeader(group: AggregateGroup, isSearching: Boolean) {
+    val status = when {
+        group.error != null -> "不可用：${group.error}"
+        group.results.isEmpty() && isSearching -> "搜索中…"
+        group.results.isEmpty() -> "无结果"
+        else -> "${group.results.size} 个结果"
+    }
+    Column(Modifier.padding(start = 4.dp, top = 4.dp)) {
+        Text(
+            text = group.mode.name,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            text = status,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}

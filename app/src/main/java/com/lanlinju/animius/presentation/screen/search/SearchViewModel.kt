@@ -2,62 +2,63 @@ package com.lanlinju.animius.presentation.screen.search
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.paging.PagingData
-import androidx.paging.cachedIn
 import com.lanlinju.animius.data.remote.parse.util.CaptchaCookieManager
-import com.lanlinju.animius.domain.model.Anime
-import com.lanlinju.animius.domain.repository.AnimeRepository
-import com.lanlinju.animius.util.SourceHolder
+import com.lanlinju.animius.data.repository.AggregateGroup
+import com.lanlinju.animius.data.repository.AggregateSearch
 import com.lanlinju.animius.util.SourceMode
 import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import javax.inject.Inject
 
+/**
+ * 搜索页 ViewModel（tv.9 切片 3）。
+ *
+ * 搜索是兜底：一次搜所有可用源，按源分组、先到先显示；**只显示源站结果**，
+ * 不再叠加元数据搜索结果（用户 2026-10-22 拍板）。
+ */
 @HiltViewModel
 class SearchViewModel @Inject constructor(
-    private val repository: AnimeRepository
+    private val aggregateSearch: AggregateSearch,
 ) : ViewModel() {
-    private val _animesState: MutableStateFlow<PagingData<Anime>> =
-        MutableStateFlow(value = PagingData.empty())
-    val animesState: StateFlow<PagingData<Anime>>
-        get() = _animesState
+
+    /** 按源分组的结果；某源 `error == null && results 为空` 且 [isSearching] = 搜索中 */
+    private val _groups: MutableStateFlow<List<AggregateGroup>> = MutableStateFlow(emptyList())
+    val groups: StateFlow<List<AggregateGroup>>
+        get() = _groups
+
+    private val _isSearching: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    val isSearching: StateFlow<Boolean>
+        get() = _isSearching
 
     private val _query: MutableStateFlow<String> = MutableStateFlow(value = "")
     val query: StateFlow<String>
         get() = _query
 
-    private val _needCaptchaUrl: MutableStateFlow<String?> =
-        MutableStateFlow(value = null)
+    private val _needCaptchaUrl: MutableStateFlow<String?> = MutableStateFlow(value = null)
     val needCaptchaUrl: StateFlow<String?>
         get() = _needCaptchaUrl
 
     // 只在第一次进入时请求焦点
     var hasFocusRequest = false
 
-    // 周表元数据带来的初始 query 是否已消费；放在 ViewModel 里跨组合存活，
-    // 避免清空查询后旋转/从详情返回时又被重新预填（进程重建会重新创建 ViewModel，仍能恢复）
+    // 从周表/详情带进来的初始 query 是否已消费；放在 ViewModel 里跨组合存活
     var initialQueryConsumed = false
 
-    /**
-     * 用于标识使用当前动漫源搜索数据
-     *
-     * Note: 在Compose 组合函数中，从上一个界面返当前界面时，[remember]保存的数据状态会丢失。
-     */
-    var currentSourceMode = SourceHolder.currentSourceMode
-
-    fun onSearch(query: String, mode: SourceMode) {
-        getSearchData(query, mode)
-    }
-
-    fun clearSearchQuery() {
-        _query.value = ""
-    }
+    private var searchJob: Job? = null
 
     fun onQuery(query: String) {
         _query.value = query
+    }
+
+    fun clearSearchQuery() {
+        searchJob?.cancel()
+        _isSearching.value = false
+        _query.value = ""
+        _groups.value = emptyList()
     }
 
     fun clearNeedCaptcha() {
@@ -65,23 +66,30 @@ class SearchViewModel @Inject constructor(
         CaptchaCookieManager.captchaUrl = ""
     }
 
-    fun getSearchData(query: String, mode: SourceMode) {
-        if (query.isEmpty()) return
+    /** 用户点搜索 / 进入页面自动搜索：一次打全部可选源 */
+    fun searchAll(query: String) {
+        if (query.isBlank()) return
+        searchJob?.cancel()
+        _query.value = query
+        _isSearching.value = true
 
-        viewModelScope.launch {
-            repository.getSearchData(query, mode)
-                .distinctUntilChanged()
-                .cachedIn(viewModelScope)
-                .collect {
-                    _animesState.value = it
-                    checkNeedCaptcha()
+        val sources = SourceMode.entries.filter { it.selectable }
+        // 占位：每个源先显示「搜索中」，结果到达后原地替换（先到先显示）
+        _groups.value = sources.map { AggregateGroup(it) }
+
+        searchJob = viewModelScope.launch {
+            val finalGroups = aggregateSearch.search(query, sources) { group ->
+                _groups.update { current ->
+                    current.map { if (it.mode == group.mode) group else it }
                 }
+            }
+            _groups.value = finalGroups
+            _isSearching.value = false
+            checkNeedCaptcha()
         }
     }
 
-    /**
-     * 检查是否需要验证码
-     */
+    /** 检查是否需要验证码（源实现触发时写入 CaptchaCookieManager） */
     private fun checkNeedCaptcha() {
         val url = CaptchaCookieManager.captchaUrl
         if (url.isNotEmpty()) {
