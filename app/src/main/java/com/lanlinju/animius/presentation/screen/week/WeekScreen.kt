@@ -369,7 +369,8 @@ fun WeekList(
         val saved = lastFocusedIndex.intValue
         val requester = itemRequesters[saved]
         "week page=$page saved=$saved mapSize=${itemRequesters.size} requester=${requester != null}".log("FocusRestore")
-        if (saved > 0) {
+        // 0 是第一个条目，必须一起恢复；-1 才是「从没聚焦过」
+        if (saved >= 0) {
             requester?.let {
                 runCatching { it.requestFocus() }
                     .onFailure { e -> "week requestFocus失败: $e".log("FocusRestore") }

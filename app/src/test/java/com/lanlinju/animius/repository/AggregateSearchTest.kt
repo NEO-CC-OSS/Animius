@@ -60,7 +60,8 @@ class AggregateSearchTest {
     @Test
     fun `onGroup is called once per source so results can show as they arrive`() = runBlocking {
         val api = FakeAnimeApi(search = { _, _ -> emptyList() })
-        val seen = mutableListOf<AggregateGroup>()
+        // 三个 worker 并发回调 onGroup：普通 MutableList 会丢元素
+        val seen = java.util.Collections.synchronizedList(mutableListOf<AggregateGroup>())
 
         AggregateSearch(api).search("测试番", sources) { seen += it }
 

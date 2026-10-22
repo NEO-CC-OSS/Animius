@@ -19,14 +19,20 @@ data class AnimeDetailBean(
         } else {
             channels.mapValues { it.value.map { it.toEpisode() } }
         }
+        // 多线路源的线路键不一定从 0 开始（采集源会丢掉「只有分享页」的线路，
+        // 例：量子「闹鬼酒店 第二季」liangzi 线路全是 /share/ → 只剩 key=1 的 lzm3u8）。
+        // 主剧集取第一个非空线路，channelIndex 也指向它，避免详情页「有线路、却无剧集」。
+        val primaryKey = tempChannels.keys.sorted()
+            .firstOrNull { tempChannels[it].orEmpty().isNotEmpty() }
         return AnimeDetail(
             title = title,
             img = imgUrl,
             desc = desc,
             tags = tags.map { it.uppercase() },
             lastPosition = 0,
-            episodes = tempChannels[0] ?: emptyList(),
+            episodes = primaryKey?.let { tempChannels[it] }.orEmpty(),
             relatedAnimes = relatedAnimes.map { it.toAnime() },
+            channelIndex = primaryKey ?: 0,
             channels = tempChannels,
         )
     }

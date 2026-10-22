@@ -23,6 +23,12 @@
     <string name="home">推荐</string>
     <string name="profile">Profile</string>
     <string name="search">搜索</string>
+    <string name="detail_search_hint">有问题？去搜索</string>
+    <string name="source_no_episodes">该源暂无可用剧集，换一个源或去搜索</string>
+    <string name="jump_latest_episode">最新</string>
+    <string name="select_episode_segment">选择集数范围</string>
+    <string name="episode_segment_range">第 %1$d-%2$d 集</string>
+    <string name="episode_segment_summary">第 %1$d-%2$d 集 / 共 %3$d 集</string>
     <string name="more">更多</string>
     <string name="week">WeekRank</string>
     <string name="download">下载</string>

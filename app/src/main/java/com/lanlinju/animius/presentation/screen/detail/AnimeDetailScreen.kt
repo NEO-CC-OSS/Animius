@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -67,6 +68,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -100,7 +102,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.lanlinju.animius.R
-import com.lanlinju.animius.domain.matching.TitleMatcher
 import com.lanlinju.animius.domain.model.Anime
 import com.lanlinju.animius.domain.model.AnimeDetail
 import com.lanlinju.animius.domain.model.Download
@@ -199,6 +200,31 @@ fun AnimeDetailScreen(
                 var showBottomSheet by remember { mutableStateOf(false) }
                 var showChannelSelectorDialog by remember { mutableStateOf(false) }
                 var showDownloadBottomSheet by remember { mutableStateOf(false) }
+                // 1000+ 集分段（海贼王这类）：每段 100 集，默认定位到续播位置所在段
+                var segmentIndex by rememberSaveable { mutableIntStateOf(0) }
+                var segmentInitialized by rememberSaveable { mutableStateOf(false) }
+                var showSegmentDialog by remember { mutableStateOf(false) }
+                val segmentSize = 100
+                val episodeCount = animeDetail.episodes.size
+                val segmentCount = if (episodeCount <= 0) 1 else (episodeCount + segmentSize - 1) / segmentSize
+                val segmentStart = segmentIndex.coerceIn(0, segmentCount - 1) * segmentSize
+                val segmentLabel = if (segmentCount > 1) {
+                    stringResource(
+                        Res.string.episode_segment_summary,
+                        segmentStart + 1,
+                        minOf(segmentStart + segmentSize, episodeCount),
+                        episodeCount,
+                    )
+                } else {
+                    null
+                }
+                LaunchedEffect(episodeCount, animeDetail.lastPosition) {
+                    if (!segmentInitialized && episodeCount > 0) {
+                        val position = animeDetail.lastPosition.coerceAtLeast(0)
+                        segmentIndex = (position / segmentSize).coerceIn(0, segmentCount - 1)
+                        segmentInitialized = true
+                    }
+                }
 
                 val background = Color(
                     ColorUtils.blendARGB(
@@ -253,6 +279,7 @@ fun AnimeDetailScreen(
                         detailUrl = viewModel.detailUrl,
                         canDownload = canUseSourceActions,
                         onBackClick = onBackClick,
+                        onSearchClick = { onNavigateToSearchWithQuery(viewModel.searchTitle) },
                         onDownloadClick = { showDownloadBottomSheet = true }
                     )
 
@@ -326,6 +353,17 @@ fun AnimeDetailScreen(
                                     onRetryClick = { viewModel.retry() },
                                     onSearchClick = { onNavigateToSearchWithQuery(viewModel.searchTitle) },
                                 )
+                            } else if (animeDetail.episodes.isEmpty()) {
+                                // 该源条目没有可播剧集（例如所有线路都是分享页）：
+                                // 给明确提示 + 去搜索，避免出现「空剧集区、只剩控制条」让人以为卡住
+                                WarningMessage(
+                                    textId = Res.string.source_no_episodes,
+                                    onRetryClick = { viewModel.retry() },
+                                    secondaryTextId = Res.string.source_search_manually,
+                                    onSecondaryClick = {
+                                        onNavigateToSearchWithQuery(viewModel.searchTitle)
+                                    },
+                                )
                             } else {
                                 AnimeEpisodes(
                                     episodes = animeDetail.episodes,
@@ -340,6 +378,8 @@ fun AnimeDetailScreen(
                                         end = dimensionResource(Res.dimen.large_padding)
                                     ),
                                     reverseList = reverseList,
+                                    segmentStart = segmentStart,
+                                    segmentSize = segmentSize,
                                     onEpisodeClick = { index, episode ->
                                         handleEpisodeSelection(
                                             index, episode, animeDetail,
@@ -352,9 +392,25 @@ fun AnimeDetailScreen(
                                     modifier = Modifier.align(Alignment.BottomEnd),
                                     channelIndex = animeDetail.channelIndex,
                                     isShowChannel = animeDetail.channels.size > 1,
-                                    onReverseClick = { reverseList = !reverseList },
+                                    onReverseClick = {
+                                        reverseList = !reverseList
+                                        // 反转后显示顺序变了：回到第 1 段，避免段号语义混乱
+                                        segmentIndex = 0
+                                        segmentInitialized = true
+                                    },
                                     onMoreClick = { showBottomSheet = true },
-                                    onChannelClick = { showChannelSelectorDialog = true }
+                                    onChannelClick = { showChannelSelectorDialog = true },
+                                    segmentLabel = segmentLabel,
+                                    onSegmentClick = if (segmentCount > 1) {
+                                        { showSegmentDialog = true }
+                                    } else {
+                                        null
+                                    },
+                                    onLatestClick = if (segmentCount > 1) {
+                                        { segmentIndex = segmentCount - 1 }
+                                    } else {
+                                        null
+                                    },
                                 )
                             }
                         }
@@ -373,6 +429,20 @@ fun AnimeDetailScreen(
                                 }
                             )
                         }
+                    }
+
+                    // 集数分段选择（1000+ 集：海贼王这类按 100 集一段跳转）
+                    if (showSegmentDialog) {
+                        EpisodeSegmentDialog(
+                            episodeCount = episodeCount,
+                            segmentSize = segmentSize,
+                            currentIndex = segmentIndex,
+                            onSelect = { index ->
+                                segmentIndex = index
+                                showSegmentDialog = false
+                            },
+                            onDismiss = { showSegmentDialog = false },
+                        )
                     }
 
                     Box(
@@ -514,14 +584,17 @@ private fun ResolvingIndicator(state: SourceInfoState) {
     }
 }
 
-/** 「播放源：X」；站点标题与元数据标题差异较大时一并显示，方便一眼核对有没有进错番 */
+/**
+ * 「播放源：X · 站点标题：Y」。
+ *
+ * 站点标题始终显示（用户 2026-10-22）：这是判断「匹配的是不是同一部番」最直观的信息，
+ * 不能因为和元数据标题一样就藏起来。
+ */
 @Composable
 private fun sourceLabel(state: SourceInfoState): String? = when (state) {
     is SourceInfoState.Ready -> {
         val siteTitle = state.siteTitle
-        if (siteTitle.isNotBlank() &&
-            TitleMatcher.normalize(siteTitle) != TitleMatcher.normalize(state.metadataTitle)
-        ) {
+        if (siteTitle.isNotBlank()) {
             stringResource(Res.string.source_label_with_site_title, state.mode.name, siteTitle)
         } else {
             stringResource(Res.string.source_label, state.mode.name)
@@ -537,6 +610,7 @@ private fun TopAppBar(
     detailUrl: String = "",
     canDownload: Boolean = true,
     onBackClick: () -> Unit,
+    onSearchClick: () -> Unit,
     onDownloadClick: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -555,6 +629,18 @@ private fun TopAppBar(
             }
         },
         actions = {
+            // 文字按钮比图标直观（用户 2026-10-22）：匹配错了/想换片源时点这里，
+            // 带着当前标题进聚合搜索；成功/失败两种状态都保留这个入口
+            TextButton(
+                modifier = Modifier.tvFocus(shape = CircleShape),
+                onClick = onSearchClick
+            ) {
+                Text(
+                    text = stringResource(id = R.string.detail_search_hint),
+                    color = Color.White.copy(alpha = 0.85f),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
             Box {
                 IconButton(
                     modifier = Modifier.tvFocus(shape = CircleShape),
@@ -898,12 +984,28 @@ fun AnimeEpisodes(
     reverseList: Boolean,
     contentPadding: PaddingValues,
     color: Color = MaterialTheme.colorScheme.secondaryContainer,
+    /** 分段：只渲染 [segmentStart, segmentStart + segmentSize) 这一段（1000+ 集用） */
+    segmentStart: Int = 0,
+    segmentSize: Int = Int.MAX_VALUE,
     onEpisodeClick: (index: Int, episode: Episode) -> Unit
 ) {
+    val display = if (!reverseList) episodes else episodes.reversed()
+    val visible = display.drop(segmentStart).take(segmentSize)
+
     val scrollState = rememberLazyListState(
         initialFirstVisibleItemIndex = if (lastPosition < 3) 0 else lastPosition,
         initialFirstVisibleItemScrollOffset = if (lastPosition < 3) 0 else -200
     )
+
+    // 切换分段后回到段首；续播位置落在当前段时定位到那一集
+    LaunchedEffect(segmentStart, reverseList) {
+        val target = if (lastPosition in segmentStart until segmentStart + segmentSize) {
+            lastPosition - segmentStart
+        } else {
+            0
+        }
+        runCatching { scrollState.scrollToItem(target.coerceIn(0, (visible.size - 1).coerceAtLeast(0))) }
+    }
 
     val isAndroidTV = isAndroidTV(LocalContext.current)
 
@@ -913,10 +1015,10 @@ fun AnimeEpisodes(
         modifier = modifier,
         state = scrollState
     ) {
-        itemsIndexed(if (!reverseList) episodes else episodes.reversed()) { index, episode ->
+        itemsIndexed(visible) { localIndex, episode ->
             val focusRequester = remember { FocusRequester() }
             FilledTonalButton(
-                onClick = { onEpisodeClick(index, episode) },
+                onClick = { onEpisodeClick(segmentStart + localIndex, episode) },
                 colors = ButtonDefaults.filledTonalButtonColors(containerColor = color.copy(0.5f)),
                 modifier = Modifier.run {
                     if (isAndroidTV) {
@@ -940,7 +1042,7 @@ fun AnimeEpisodes(
             }
 
             LaunchedEffect(Unit) {
-                if (index == lastPosition && isAndroidTV) {
+                if (segmentStart + localIndex == lastPosition && isAndroidTV) {
                     focusRequester.requestFocus()
                 }
             }
@@ -989,6 +1091,9 @@ private fun EpisodeListControl(
     onReverseClick: () -> Unit,
     onMoreClick: () -> Unit,
     onChannelClick: () -> Unit,
+    segmentLabel: String? = null,
+    onSegmentClick: (() -> Unit)? = null,
+    onLatestClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
@@ -1021,6 +1126,31 @@ private fun EpisodeListControl(
             color = MaterialTheme.colorScheme.primary,
             style = MaterialTheme.typography.labelMedium
         )
+
+        // 1000+ 集（海贼王这类）：直接跳到最后一集 / 按 100 集分段，省得一路翻
+        if (onLatestClick != null) {
+            Spacer(modifier = Modifier.size(12.dp))
+            Text(
+                modifier = Modifier
+                    .tvFocus(shape = CircleShape)
+                    .clickable(onClick = onLatestClick),
+                text = stringResource(id = Res.string.jump_latest_episode),
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.labelMedium
+            )
+        }
+
+        if (onSegmentClick != null && segmentLabel != null) {
+            Spacer(modifier = Modifier.size(12.dp))
+            Text(
+                modifier = Modifier
+                    .tvFocus(shape = CircleShape)
+                    .clickable(onClick = onSegmentClick),
+                text = segmentLabel,
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.labelMedium
+            )
+        }
 
         Spacer(modifier = Modifier.size(12.dp))
 
@@ -1206,5 +1336,56 @@ fun ChannelSelectorDialog(
                 Text(text = stringResource(id = R.string.confirm))
             }
         }
+    )
+}
+
+/**
+ * 集数分段选择（1000+ 集：海贼王这类）。
+ *
+ * 每段 [segmentSize] 集，列出「第 1-100 集」这样的范围，选中后主列表只渲染该段；
+ * 段数不多时直接全部列出，段很多时 LazyColumn 自己滚动。
+ */
+@Composable
+private fun EpisodeSegmentDialog(
+    episodeCount: Int,
+    segmentSize: Int,
+    currentIndex: Int,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val segmentCount = (episodeCount + segmentSize - 1) / segmentSize
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = stringResource(Res.string.select_episode_segment)) },
+        text = {
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 420.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                items(segmentCount) { index ->
+                    val start = index * segmentSize
+                    val end = minOf((index + 1) * segmentSize, episodeCount)
+                    Text(
+                        text = stringResource(Res.string.episode_segment_range, start + 1, end),
+                        color = if (index == currentIndex) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(MaterialTheme.shapes.small)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .clickable { onSelect(index) }
+                            .padding(16.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(text = stringResource(id = R.string.cancel))
+            }
+        },
     )
 }
