@@ -89,4 +89,33 @@ class SearchQueriesTest {
 
         assertEquals(listOf("某番", "某番 第二季", "某番外传", "Some Anime"), queries)
     }
+
+    @Test
+    fun `main stem is generated and placed right after the full title`() {
+        val queries = SearchQueries.build(
+            title = "测试番：副标题",
+            originalTitle = "测试番 第2期",
+            aliases = listOf("测试番别名"),
+        )
+
+        // ① 中文全名 → ② 中文主干名 → ③ 中文别名 → ④ 日文原名（主干名与全名重复时去重）
+        assertEquals(listOf("测试番：副标题", "测试番", "测试番别名", "测试番 第2期"), queries)
+    }
+
+    @Test
+    fun `main stem strips season special and year suffixes`() {
+        assertEquals("战车椅子", SearchQueries.mainStem("战车椅子 特别篇"))
+        assertEquals("战车椅子", SearchQueries.mainStem("战车椅子 第2季"))
+        assertEquals("战车椅子", SearchQueries.mainStem("战车椅子（2026）"))
+        assertEquals("战车椅子", SearchQueries.mainStem("战车椅子：副标题"))
+        assertEquals("战车椅子", SearchQueries.mainStem("战车椅子 剧场版"))
+    }
+
+    @Test
+    fun `main stem shorter than three characters is not generated`() {
+        // 「某番」只有两个字：不生成主干名，避免过短误配
+        assertEquals(null, SearchQueries.mainStem("某番"))
+        assertEquals(null, SearchQueries.mainStem("某番 第二季"))
+        assertEquals(null, SearchQueries.mainStem(""))
+    }
 }

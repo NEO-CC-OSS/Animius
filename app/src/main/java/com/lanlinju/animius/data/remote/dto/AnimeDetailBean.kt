@@ -10,6 +10,8 @@ data class AnimeDetailBean(
     val relatedAnimes: List<AnimeBean>,
     val episodes: List<EpisodeBean> = emptyList(),  /* 保持对旧的数据兼容, 如果支持多线路则需要置为空 */
     val channels: Map<Int, List<EpisodeBean>> = emptyMap(), /* 剧集多线路支持 */
+    /** 站点声明的总集数（采集源 `vod_total`；番剧站没有该字段时为 0） */
+    val totalEpisodes: Int = 0,
 ) {
     fun toAnimeDetail(): AnimeDetail {
         val tempChannels = if (episodes.isNotEmpty()) { /* 保持对旧的不支持多线路的兼容 */

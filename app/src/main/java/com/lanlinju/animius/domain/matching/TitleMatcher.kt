@@ -65,6 +65,15 @@ object TitleMatcher {
         '六' to 6, '七' to 7, '八' to 8, '九' to 9,
     )
 
+    /**
+     * 采集站库存里的杂项条目（2026-10-22 tv.9 切片 2）：候选标题含这些词、目标不含 → 不是正片。
+     * 只用于拒绝，不参与打分；目标自身是剧场版/特典时不误杀。
+     */
+    private val JUNK_WORDS = listOf(
+        "解说", "预告", "合集", "花絮", "片段", "剪辑",
+        "剧场版", "电影版", "总集篇", "特典",
+    )
+
     /** 比较用的主干名：去年份、去季标、去标点空格、转小写 */
     fun normalize(name: String): String =
         stripSeasons(name.replace(yearPattern, ""))
@@ -108,6 +117,19 @@ object TitleMatcher {
     }
 
     fun isMovie(name: String): Boolean = moviePattern.containsMatchIn(name)
+
+    /**
+     * 候选是不是采集站里的杂项（解说/预告/合集/剧场版…）：
+     * 候选归一化后含排除词、而目标不含 → true（拒绝）。
+     *
+     * 目标自身含该词（例如目标就是「XX 剧场版」）时不拒绝，避免误杀正片。
+     */
+    fun isJunkCandidate(target: String, candidate: String): Boolean {
+        val targetBase = normalize(target)
+        val candidateBase = normalize(candidate)
+        if (candidateBase.isEmpty()) return false
+        return JUNK_WORDS.any { word -> candidateBase.contains(word) && !targetBase.contains(word) }
+    }
 
     /**
      * 候选标题是否可信：归一化主干相等（或候选是目标子串且长度差在阈值内），且季数/剧场版标记兼容。

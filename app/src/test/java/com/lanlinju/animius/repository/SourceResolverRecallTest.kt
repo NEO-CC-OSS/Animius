@@ -39,19 +39,18 @@ class SourceResolverRecallTest {
     private val now: Instant = Instant.parse("2026-10-22T00:00:00Z")
     private val deadline: Long = Long.MAX_VALUE
 
-    private val nonSkr = setOf(
+    /** 候选顺序（2026-10-22 tv.9 切片 1）：Lz → Bf → Md → Agedm → Silisili */
+    private val withoutLz = setOf(
+        SourceMode.Bf,
+        SourceMode.Md,
+        SourceMode.Agedm,
         SourceMode.Silisili,
-        SourceMode.Agedm,
-        SourceMode.Jzacg,
-        SourceMode.Girigiri,
-        SourceMode.Gugufan,
     )
-    private val nonSilisili = setOf(
-        SourceMode.Skr,
+    private val withoutBf = setOf(
+        SourceMode.Lz,
+        SourceMode.Md,
         SourceMode.Agedm,
-        SourceMode.Jzacg,
-        SourceMode.Girigiri,
-        SourceMode.Gugufan,
+        SourceMode.Silisili,
     )
 
     @Test
@@ -62,8 +61,8 @@ class SourceResolverRecallTest {
             title = "测试番",
             originalTitle = "テストバン",
             aliases = listOf("测试别名", "Test Ban", "测试番 第二季"),
-            currentMode = SourceMode.Skr,
-            exclude = nonSkr,
+            currentMode = SourceMode.Lz,
+            exclude = withoutLz,
             now = now,
             deadlineMillis = deadline,
         )
@@ -73,7 +72,8 @@ class SourceResolverRecallTest {
         assertTrue("只试了 ${queries.size} 个关键词：$queries", queries.size >= 4)
         // 串行按关键词表顺序发：中文标题/中文别名先试，日文原名不会排在前两位
         assertTrue("日文原名不该排在前两位：$queries", queries.take(2).none { "テスト" in it })
-        assertTrue("6 条上限内应该也试到日文原名：$queries", queries.contains("テストバン"))
+        // 2026-10-22 tv.9 切片 2：日文原名只发给 Agedm，采集源（Lz）不发
+        assertTrue("采集源不该收到日文原名：$queries", queries.none { "テスト" in it })
         // 不再翻页：所有探测都只取第 1 页
         assertEquals(listOf(1), api.searchCalls.map { it.page }.distinct())
     }
@@ -99,8 +99,8 @@ class SourceResolverRecallTest {
 
         val result = SourceResolver(api, FakeStore()).resolve(
             title = "测试番",
-            currentMode = SourceMode.Silisili,
-            exclude = nonSilisili,
+            currentMode = SourceMode.Bf,
+            exclude = withoutBf,
             now = now,
             deadlineMillis = deadline,
         )
@@ -123,8 +123,8 @@ class SourceResolverRecallTest {
 
         val result = SourceResolver(api, FakeStore()).resolve(
             title = "测试番",
-            currentMode = SourceMode.Skr,
-            exclude = nonSkr,
+            currentMode = SourceMode.Lz,
+            exclude = withoutLz,
             now = now,
             deadlineMillis = deadline,
         )
@@ -148,15 +148,16 @@ class SourceResolverRecallTest {
             title = "测试番",
             originalTitle = "テストバン",
             aliases = listOf("测试别名", "Test Ban", "别名二", "别名三"),
-            currentMode = SourceMode.Skr,
-            exclude = nonSkr,
+            currentMode = SourceMode.Lz,
+            exclude = withoutLz,
             now = now,
             deadlineMillis = deadline,
         )
 
         assertTrue(result is SourceResolveResult.Failure)
         assertEquals("源内探测必须串行（在飞请求 ≤1）", 1, api.maxInFlight.get())
-        assertEquals(6, api.searchCalls.size)
+        // 5 条中文/拉丁查询（日文原名被过滤，只发 Agedm）
+        assertEquals(5, api.searchCalls.size)
     }
 
     @Test
@@ -167,14 +168,14 @@ class SourceResolverRecallTest {
 
         val result = SourceResolver(api, FakeStore()).resolve(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
         )
 
         assertTrue(result is SourceResolveResult.Failure)
         result as SourceResolveResult.Failure
-        assertEquals(6, result.attempts.size)
+        assertEquals(5, result.attempts.size)
         assertTrue("每个源都要有诊断", result.attempts.all { it.diagnostics != null })
 
         val first = result.attempts.first().diagnostics!!
@@ -198,8 +199,8 @@ class SourceResolverRecallTest {
 
         val result = SourceResolver(api, FakeStore()).resolve(
             title = "测试番",
-            currentMode = SourceMode.Skr,
-            exclude = nonSkr,
+            currentMode = SourceMode.Lz,
+            exclude = withoutLz,
             now = now,
             deadlineMillis = System.currentTimeMillis() + 2_000,
         )
@@ -217,7 +218,7 @@ class SourceResolverRecallTest {
 
         val result = SourceResolver(api, FakeStore()).resolve(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = System.currentTimeMillis() + 5_000,
         )
@@ -241,7 +242,7 @@ class SourceResolverRecallTest {
 
         val result = SourceResolver(api, FakeStore()).resolveConcurrent(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
             maxConcurrency = 3,
@@ -250,10 +251,54 @@ class SourceResolverRecallTest {
 
         assertTrue(result is SourceResolveResult.Failure)
         result as SourceResolveResult.Failure
-        assertEquals(6, result.attempts.size)
+        assertEquals(5, result.attempts.size)
         // 探测异常照旧整源失败，风控文本没被吞成「搜索无匹配」
         assertTrue(result.attempts.all { SourceRiskSignal.isRiskControl(it.reason) })
-        assertEquals(listOf(3, 2, 1), progress.map { it.concurrency }.distinct())
+        assertEquals(listOf(3, 2), progress.map { it.concurrency }.distinct())
+    }
+
+    /** 2026-10-22 tv.9 切片 2：采集站不吃日文原名，含假名的查询只发给 Agedm */
+    @Test
+    fun `japanese original query is only sent to agedm`() = runBlocking {
+        val api = FakeAnimeApi(search = { _, _, _ -> emptyList() })
+
+        SourceResolver(api, FakeStore()).resolve(
+            title = "测试番",
+            originalTitle = "テストバン",
+            currentMode = SourceMode.Lz,
+            now = now,
+            deadlineMillis = deadline,
+        )
+
+        val japaneseCalls = api.searchCalls.filter { "テスト" in it.query }
+        assertTrue("日文原名应该被发出去（Agedm）", japaneseCalls.isNotEmpty())
+        assertTrue(
+            "日文原名只能发给 Agedm：$japaneseCalls",
+            japaneseCalls.all { it.mode == SourceMode.Agedm },
+        )
+    }
+
+    /** 2026-10-22 tv.9 切片 2：解说/预告等杂项候选在详情验证前就被拒绝 */
+    @Test
+    fun `junk candidate is rejected before detail verification`() = runBlocking {
+        val api = FakeAnimeApi(
+            search = { _, _, _ -> listOf(AnimeBean("测试番 解说", "", "https://x/1")) },
+            detail = { _, _ -> detailBean("测试番 解说", "第01集" to "e1") },
+        )
+
+        val result = SourceResolver(api, FakeStore()).resolve(
+            title = "测试番",
+            aliases = listOf("测试番 解说"),
+            currentMode = SourceMode.Lz,
+            exclude = withoutLz,
+            now = now,
+            deadlineMillis = deadline,
+        )
+
+        assertTrue(result is SourceResolveResult.Failure)
+        result as SourceResolveResult.Failure
+        assertEquals("杂项条目不该去验详情", 0, api.detailCalls.size)
+        assertTrue(result.attempts.any { it.reason == "杂项条目" })
     }
 
     private fun detailBean(title: String, vararg episodes: Pair<String, String>) = AnimeDetailBean(

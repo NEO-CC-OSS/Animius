@@ -96,7 +96,6 @@ import com.lanlinju.animius.util.Resource
 import com.lanlinju.animius.util.SourceHolder
 import com.lanlinju.animius.util.SourceMode
 import com.lanlinju.animius.util.bannerParallax
-import com.lanlinju.animius.util.isAndroidTV
 import com.lanlinju.animius.util.isWideScreen
 import com.lanlinju.animius.util.rememberPreference
 import kotlinx.coroutines.delay
@@ -110,26 +109,14 @@ fun HomeScreen(
     onNavigateToMetadataDetail: (metadataId: Long, title: String) -> Unit = { _, _ -> },
 ) {
     val homeViewModel = hiltViewModel<HomeViewModel>()
-    val isTv = isAndroidTV(LocalContext.current)
-    // TV：只吃轻包元数据三行；手机/平板：仍走源站首页（行为不变）
-    val availableDataList = homeViewModel.homeDataList.collectAsState()
+    // 2026-10-22 设备统一：手机/平板与 TV 一样只吃轻包元数据三行
     val metadataState = homeViewModel.metadataState.collectAsState()
-    val state = if (isTv) metadataState.value else availableDataList.value
+    val state = metadataState.value
 
-    LaunchedEffect(SourceHolder.isSourceChanged) {
-        if (SourceHolder.isSourceChanged) {
-            SourceHolder.isSourceChanged = false
-            // TV 首页不依赖源站：切源不重新抓首页，也不重下轻包
-            if (!isTv) homeViewModel.refresh()
-        }
-    }
-
-    // TV 元数据就绪后，后台预取非可见行封面。
+    // 元数据就绪后，后台预取非可见行封面。
     // 用页面级 LaunchedEffect：离开首页（进详情/播放器）即取消，不会在播放时继续抢带宽。
-    LaunchedEffect(isTv, metadataState.value.data) {
-        if (isTv) {
-            metadataState.value.data?.let { rows -> homeViewModel.prefetchHiddenRowCovers(rows) }
-        }
+    LaunchedEffect(metadataState.value.data) {
+        metadataState.value.data?.let { rows -> homeViewModel.prefetchHiddenRowCovers(rows) }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -138,8 +125,8 @@ fun HomeScreen(
             onLoading = { LoadingIndicator() },
             onFailure = {
                 WarningMessage(
-                    // TV 不再回退源站内容：没有可用数据时给明确提示 + 重试（用户 2026-10-21 拍板）
-                    textId = if (isTv) Res.string.home_metadata_unavailable else Res.string.txt_empty_result,
+                    // 不回退源站内容：没有可用数据时给明确提示 + 重试（设备统一后对所有设备生效）
+                    textId = Res.string.home_metadata_unavailable,
                     onRetryClick = { homeViewModel.refresh() }
                 )
             }
@@ -169,9 +156,9 @@ fun HomeScreen(
 
                     resource.data?.let { data ->
                         HomeContent(
-                            // TV 只有元数据三行，不再拼接源站行
+                            // 只有元数据三行，不再拼接源站行（设备统一）
                             data = data,
-                            metadataRowCount = if (isTv) data.size else 0,
+                            metadataRowCount = data.size,
                             useGridLayout = useGridLayout,
                             isWideScreen = isWideScreen,
                             homeBackgroundColor = homeBackgroundColor,

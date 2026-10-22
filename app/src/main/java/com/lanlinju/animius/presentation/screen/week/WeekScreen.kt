@@ -182,15 +182,13 @@ fun WeekScreen(
                             text = stringResource(id = R.string.lbl_schedule),
                             style = MaterialTheme.typography.titleLarge
                         )
-                        // 状态行是 TV 元数据链路的信息；手机/平板保持 tv.6 的纯标题顶栏
-                        if (isTv) {
-                            Text(
-                                text = weekStatusText(metadataInfo),
-                                style = MaterialTheme.typography.bodyLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
+                        // 状态行是元数据链路的信息；2026-10-22 起手机/平板也走元数据，统一显示
+                        Text(
+                            text = weekStatusText(metadataInfo),
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
 
                 },
@@ -233,14 +231,13 @@ fun WeekScreen(
                     state = weekDataState,
                     onLoading = { LoadingIndicator() },
                     onFailure = {
-                        // TV 时间表不回退源站：没有可用数据时给明确提示 + 重试（用户 2026-10-21 拍板）
+                        // 时间表不回退源站（设备统一后对所有设备生效）：没有可用数据时给明确提示 + 重试
                         WarningMessage(
                             textId = when {
                                 metadataInfo.origin == WeekDataOrigin.Empty ->
                                     R.string.week_metadata_empty
 
-                                isTv -> R.string.week_metadata_unavailable
-                                else -> R.string.txt_empty_result
+                                else -> R.string.week_metadata_unavailable
                             },
                             onRetryClick = { viewModel.refresh() }
                         )
@@ -872,8 +869,11 @@ private fun SourceSwitchDialog(
 ) {
     var currentSourceMode by rememberPreference(KEY_SOURCE_MODE, DEFAULT_ANIME_SOURCE)
 
-    val radioOptions = SourceMode.entries
-    val (selectedOption, onOptionSelected) = remember { mutableStateOf(currentSourceMode) }
+    // 老用户偏好里可能是已停用的源（Skr/Girigiri/Gugufan/Jzacg）：回落到默认源，
+    // 并只列出仍可选的源（2026-10-22 tv.9 切片 1）
+    val initialMode = if (currentSourceMode.selectable) currentSourceMode else DEFAULT_ANIME_SOURCE
+    val radioOptions = SourceMode.entries.filter { it.selectable }
+    val (selectedOption, onOptionSelected) = remember { mutableStateOf(initialMode) }
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -946,7 +946,6 @@ private fun SourceSwitchDialog(
                 modifier = Modifier.tvFocus(shape = CircleShape),
                 onClick = {
                     currentSourceMode = selectedOption      // 保存默认源到偏好设置
-                    SourceHolder.isSourceChanged = true     // 触发Home数据刷新
                     SourceHolder.switchSource(selectedOption) // 切换数据源
                     onDismissRequest()                      // 关闭Dialog
                     onRefresh()                             // Week页面重新获取数据
@@ -1107,7 +1106,6 @@ private fun DomainChangeDialog(
             TextButton(onClick = {
                 if (text.isNotEmpty()) {
                     currentDomain = text
-                    SourceHolder.isSourceChanged = true
                     SourceHolder.currentSource.baseUrl = currentDomain
                     onDismissRequest(true)
                 } else {

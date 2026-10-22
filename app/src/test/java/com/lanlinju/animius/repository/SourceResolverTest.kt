@@ -29,7 +29,7 @@ class SourceResolverTest {
     fun `falls back to the next source when the current source has no match`() = runBlocking {
         val api = FakeAnimeApi(
             search = { mode, _ ->
-                if (mode == SourceMode.Silisili) {
+                if (mode == SourceMode.Bf) {
                     listOf(AnimeBean("测试番", "", "https://silisili/1"))
                 } else {
                     emptyList()
@@ -45,17 +45,17 @@ class SourceResolverTest {
 
         val result = resolver.resolve(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
         )
 
         assertTrue(result is SourceResolveResult.Success)
         result as SourceResolveResult.Success
-        assertEquals(SourceMode.Silisili, result.source.mode)
+        assertEquals(SourceMode.Bf, result.source.mode)
         assertEquals(2, result.source.episodes.size)
         assertFalse(result.fromCache)
-        assertEquals(listOf(SourceMode.Skr, SourceMode.Silisili), api.searchCalls.map { it.first }.distinct())
+        assertEquals(listOf(SourceMode.Lz, SourceMode.Bf), api.searchCalls.map { it.first }.distinct())
         // 成功后写入缓存
         assertTrue(store.map.containsKey("title:测试番"))
     }
@@ -65,8 +65,8 @@ class SourceResolverTest {
         val api = FakeAnimeApi(
             search = { mode, _ ->
                 when (mode) {
-                    SourceMode.Skr -> throw IllegalStateException("timeout")
-                    SourceMode.Silisili -> listOf(AnimeBean("测试番", "", "https://silisili/1"))
+                    SourceMode.Lz -> throw IllegalStateException("timeout")
+                    SourceMode.Bf -> listOf(AnimeBean("测试番", "", "https://silisili/1"))
                     else -> emptyList()
                 }
             },
@@ -74,14 +74,14 @@ class SourceResolverTest {
         )
         val result = SourceResolver(api, FakeStore()).resolve(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
         )
 
         assertTrue(result is SourceResolveResult.Success)
         result as SourceResolveResult.Success
-        assertEquals(SourceMode.Silisili, result.source.mode)
+        assertEquals(SourceMode.Bf, result.source.mode)
     }
 
     @Test
@@ -89,14 +89,14 @@ class SourceResolverTest {
         val api = FakeAnimeApi(search = { _, _ -> emptyList() })
         val result = SourceResolver(api, FakeStore()).resolve(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
         )
 
         assertTrue(result is SourceResolveResult.Failure)
         result as SourceResolveResult.Failure
-        assertEquals(6, result.attempts.size)
+        assertEquals(5, result.attempts.size)
         assertTrue(result.attempts.all { it.reason == "搜索无匹配" })
     }
 
@@ -108,7 +108,7 @@ class SourceResolverTest {
         )
         val result = SourceResolver(api, FakeStore()).resolve(
             title = "测试番 第二季",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
         )
@@ -136,7 +136,7 @@ class SourceResolverTest {
         val result = SourceResolver(api, store).resolve(
             title = "测试番",
             metadataId = 42,
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
         )
@@ -167,7 +167,7 @@ class SourceResolverTest {
         val result = SourceResolver(api, store).resolve(
             title = "测试番",
             metadataId = 42,
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
         )
@@ -182,7 +182,7 @@ class SourceResolverTest {
     fun `episode switch picks the same episode number in another source`() = runBlocking {
         val api = FakeAnimeApi(
             search = { mode, _ ->
-                if (mode == SourceMode.Silisili) {
+                if (mode == SourceMode.Bf) {
                     listOf(AnimeBean("测试番", "", "https://silisili/1"))
                 } else {
                     emptyList()
@@ -195,14 +195,14 @@ class SourceResolverTest {
         val result = SourceResolver(api, FakeStore()).resolveEpisode(
             title = "测试番",
             episodeNumber = "2",
-            currentMode = SourceMode.Skr,
-            exclude = setOf(SourceMode.Skr),
+            currentMode = SourceMode.Lz,
+            exclude = setOf(SourceMode.Lz),
             deadlineMillis = deadline,
         )
 
         assertTrue(result is EpisodeResolveResult.Success)
         result as EpisodeResolveResult.Success
-        assertEquals(SourceMode.Silisili, result.episode.mode)
+        assertEquals(SourceMode.Bf, result.episode.mode)
         assertEquals(1, result.episode.episodeIndex)
         assertEquals("s2", result.episode.episodeUrl)
         assertEquals("video:s2", result.episode.videoUrl)
@@ -219,8 +219,8 @@ class SourceResolverTest {
         val result = SourceResolver(api, FakeStore()).resolveEpisode(
             title = "测试番",
             episodeNumber = "2",
-            currentMode = SourceMode.Skr,
-            exclude = setOf(SourceMode.Skr),
+            currentMode = SourceMode.Lz,
+            exclude = setOf(SourceMode.Lz),
             deadlineMillis = deadline,
         )
 
@@ -240,8 +240,8 @@ class SourceResolverTest {
         val result = SourceResolver(api, FakeStore()).resolveEpisode(
             title = "测试番",
             episodeNumber = "2",
-            currentMode = SourceMode.Skr,
-            exclude = setOf(SourceMode.Skr),
+            currentMode = SourceMode.Lz,
+            exclude = setOf(SourceMode.Lz),
             deadlineMillis = deadline,
         )
 
@@ -265,8 +265,8 @@ class SourceResolverTest {
 
         val result = SourceResolver(api, FakeStore()).resolve(
             title = "测试番",
-            currentMode = SourceMode.Skr,
-            exclude = setOf(SourceMode.Skr, SourceMode.Silisili),
+            currentMode = SourceMode.Lz,
+            exclude = setOf(SourceMode.Lz, SourceMode.Bf),
             now = now,
             deadlineMillis = deadline,
         )
@@ -274,7 +274,7 @@ class SourceResolverTest {
         assertTrue(result is SourceResolveResult.Success)
         result as SourceResolveResult.Success
         assertEquals(SourceMode.Agedm, result.source.mode)
-        assertTrue(api.searchCalls.none { it.first == SourceMode.Skr || it.first == SourceMode.Silisili })
+        assertTrue(api.searchCalls.none { it.first == SourceMode.Lz || it.first == SourceMode.Bf })
     }
 
     @Test
@@ -283,7 +283,7 @@ class SourceResolverTest {
 
         val result = SourceResolver(api, FakeStore()).resolve(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = 0L,
         )
@@ -312,7 +312,7 @@ class SourceResolverTest {
 
         val result = SourceResolver(api, FakeStore()).resolve(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
         )
@@ -339,7 +339,7 @@ class SourceResolverTest {
 
         val result = SourceResolver(api, FakeStore()).resolve(
             title = "航海王",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
         )
@@ -365,7 +365,7 @@ class SourceResolverTest {
 
         val result = SourceResolver(api, FakeStore()).resolve(
             title = "航海王",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
         )
@@ -387,7 +387,7 @@ class SourceResolverTest {
         resolver.resolve(
             title = "测试番",
             metadataId = 42,
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
         )
@@ -406,13 +406,13 @@ class SourceResolverTest {
         resolver.remember(
             metadataId = 42,
             title = "测试番",
-            mode = SourceMode.Silisili,
+            mode = SourceMode.Bf,
             detailUrl = "https://x/1",
             siteTitle = "测试番",
         )
 
         val match = store.get("id:42", now)
-        assertEquals(SourceMode.Silisili, match?.mode)
+        assertEquals(SourceMode.Bf, match?.mode)
         assertEquals("https://x/1", match?.detailUrl)
     }
 

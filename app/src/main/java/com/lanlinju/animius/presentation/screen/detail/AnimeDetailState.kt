@@ -13,7 +13,8 @@ import com.lanlinju.animius.util.Resource
  *   只负责「页面内容」——元数据一到就是 `Success(骨架)`，选源失败也不回退成 `Error`；
  * - `sourceInfo`：只负责「选源进度/结果」，驱动剧集区占位与「播放源」信息行。
  *
- * 手机/平板不产生骨架（[initial] 的 `isTv=false` 分支），保持 tv.6 的整页 Loading 行为。
+ * 骨架与选源对所有设备统一（2026-10-22）：只要拿到元数据就先出 `Success(骨架)`，
+ * 手机/平板不再走 tv.6 的整页 Loading 行为。
  */
 object AnimeDetailState {
 
@@ -27,17 +28,16 @@ object AnimeDetailState {
     }
 
     /**
-     * 进入页面时的初始状态：TV 且拿到了元数据 → 立刻 `Success(骨架)`，不等任何网络；
-     * 其余情况（手机/平板、没有元数据）保持原有 `Loading`。
+     * 进入页面时的初始状态：拿到了元数据 → 立刻 `Success(骨架)`，不等任何网络；
+     * 没有元数据（源站入口 / 元数据缺失）保持原有 `Loading`。
      *
      * @param fallbackTitle 元数据标题为空时的兜底（路由里带的标题），避免骨架页出现空白标题
      */
     fun initial(
         meta: MetadataItem?,
-        isTv: Boolean,
         fallbackTitle: String = "",
     ): Resource<AnimeDetail?> =
-        if (isTv && meta != null) {
+        if (meta != null) {
             Resource.Success(MetadataDetailMerger.skeleton(meta, fallbackTitle))
         } else {
             Resource.Loading

@@ -1,18 +1,14 @@
 package com.lanlinju.animius.presentation.screen.home
 
-import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.lanlinju.animius.data.remote.bangumi.CalendarLoadResult
 import com.lanlinju.animius.data.remote.bangumi.MetadataCoverPrefetcher
 import com.lanlinju.animius.data.remote.bangumi.MetadataIndexClient
 import com.lanlinju.animius.domain.model.Home
-import com.lanlinju.animius.domain.repository.AnimeRepository
 import com.lanlinju.animius.util.Resource
-import com.lanlinju.animius.util.isAndroidTV
 import com.lanlinju.animius.util.log
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.LocalDate
 import javax.inject.Inject
 import kotlinx.coroutines.Job
@@ -22,32 +18,21 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
- * 首页 ViewModel。
+ * 首页 ViewModel（2026-10-22 设备统一）。
  *
- * 两条互不干扰的链路：
- * - **TV**：只读轻包 index.json（实测约 244 KB），渲染「今日放送 / 本周新番 / 高分推荐」三行；
- *   **不再调用 [AnimeRepository.getHomeData] 抓源站首页**（tv.8 切片 1，用户 2026-10-21 拍板）。
- *   失败/空数据给出可重试的错误态，不回退源站内容。
- * - **手机/平板**：行为与 tv.6 完全一致（源站首页，无元数据行、无新增请求）。
+ * 手机/平板与 TV 走同一条链路：只读轻包 index.json（实测约 244 KB），渲染
+ * 「今日放送 / 本周新番 / 高分推荐」三行；**不再调用源站首页接口**。
+ * 失败/空数据给出可重试的错误态，不回退源站内容（原 TV 拍板，现对所有设备生效）。
+ *
+ * 设备差异只剩焦点样式/按键/尺寸（在 Composable 层用 `isAndroidTV` 判断），数据与流程不分叉。
  */
 @HiltViewModel
 class HomeViewModel @Inject constructor(
-    @ApplicationContext context: Context,
-    private val repository: AnimeRepository,
     private val metadataIndexClient: MetadataIndexClient,
     private val coverPrefetcher: MetadataCoverPrefetcher,
 ) : ViewModel() {
 
-    /** TV 逻辑一律走这个分支，手机/平板不受影响 */
-    private val isTv = isAndroidTV(context)
-
-    /** 手机/平板首页数据（源站）；TV 不使用 */
-    private val _homeDataList: MutableStateFlow<Resource<List<Home>>> =
-        MutableStateFlow(value = Resource.Loading)
-    val homeDataList: StateFlow<Resource<List<Home>>>
-        get() = _homeDataList
-
-    /** TV 首页三行元数据：Loading / Success(rows) / Error（可重试，不回退源站） */
+    /** 首页三行元数据：Loading / Success(rows) / Error（可重试，不回退源站） */
     private val _metadataState: MutableStateFlow<Resource<List<Home>>> =
         MutableStateFlow(value = Resource.Loading)
     val metadataState: StateFlow<Resource<List<Home>>>
@@ -59,26 +44,15 @@ class HomeViewModel @Inject constructor(
     private var coverPrefetchStarted = false
 
     init {
-        if (isTv) {
-            loadMetadata()
-        } else {
-            getHomeData()
-        }
-    }
-
-    private fun getHomeData() {
-        viewModelScope.launch {
-            _homeDataList.value = repository.getHomeData()
-        }
+        loadMetadata()
     }
 
     /**
-     * TV 首页只读轻包元数据。
+     * 首页只读轻包元数据。
      *
      * @param forceRefresh 用户点重试/刷新时强制重新拉取（24 h 内默认用缓存）
      */
     fun loadMetadata(forceRefresh: Boolean = false) {
-        if (!isTv) return
         metadataJob?.cancel()
         metadataJob = viewModelScope.launch {
             _metadataState.value = Resource.Loading
@@ -126,7 +100,7 @@ class HomeViewModel @Inject constructor(
      * 只预取 http(s) 地址；并发/超时/重试/缓存策略由 [MetadataCoverPrefetcher] 统一约束。
      */
     suspend fun prefetchHiddenRowCovers(rows: List<Home>) {
-        if (!isTv || coverPrefetchStarted || rows.isEmpty()) return
+        if (coverPrefetchStarted || rows.isEmpty()) return
         val urls = rows.drop(1)
             .flatMap { it.animeList }
             .map { it.img }
@@ -141,12 +115,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun refresh() {
-        if (isTv) {
-            loadMetadata(forceRefresh = true)
-            return
-        }
-        _homeDataList.value = Resource.Loading
-        getHomeData()
+        loadMetadata(forceRefresh = true)
     }
 
     private companion object {

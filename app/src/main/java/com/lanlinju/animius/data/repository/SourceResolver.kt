@@ -8,6 +8,7 @@ import com.lanlinju.animius.domain.matching.RankedCandidate
 import com.lanlinju.animius.domain.matching.SearchQueries
 import com.lanlinju.animius.domain.matching.TitleAliases
 import com.lanlinju.animius.domain.matching.TitleMatcher
+import com.lanlinju.animius.domain.matching.isJapaneseText
 import com.lanlinju.animius.domain.model.AnimeDetail
 import com.lanlinju.animius.domain.model.Episode
 import com.lanlinju.animius.util.SourceMode
@@ -113,7 +114,7 @@ class SourceResolver @Inject constructor(
         /** 单个源的搜索 + 详情预算 */
         const val PER_SOURCE_TIMEOUT_MS = 12_000L
 
-        /** 一次解析（最多 6 个源）的总预算 */
+        /** 一次解析（最多 5 个源：量子/暴风/魔都/Agedm/Silisili）的总预算 */
         const val OVERALL_TIMEOUT_MS = 45_000L
 
         /**
@@ -143,7 +144,7 @@ class SourceResolver @Inject constructor(
         /**
          * 并发路径的总预算（卡 §5「最坏 ≤20s」）。
          *
-         * 结构性最坏：6 个候选 / 3 并发 = 2 批 × 每源 [PER_SOURCE_TIMEOUT_MS] 12s = 24s，
+         * 结构性最坏：5 个候选 / 3 并发 = 2 批 × 每源 [PER_SOURCE_TIMEOUT_MS] 12s = 24s，
          * 会超出验收上限。所以并发路径单独收口到 20s：第 1 批最多 12s，第 2 批只剩 8s，
          * 不足即记「总预算耗尽」。串行 [resolve] 仍用 [OVERALL_TIMEOUT_MS]（45s），行为不变。
          */
@@ -152,14 +153,16 @@ class SourceResolver @Inject constructor(
         /** 连续风控（403/验证码）达到这个数就降一档并发：3 → 2 → 串行 */
         const val RISK_DEGRADE_STREAK = 2
 
-        /** 固定兜底顺序：稳定源在前，已知长期故障的源放最后 */
+        /**
+         * 固定兜底顺序（2026-10-22 tv.9 切片 1）：采集源在前、Agedm 补长尾、Silisili 最后兜底。
+         * Skr/Girigiri/Gugufan/Jzacg 已失效或库存过小，移出候选（代码保留，域名恢复后可改回）。
+         */
         private val FALLBACK_ORDER = listOf(
-            SourceMode.Skr,
-            SourceMode.Silisili,
+            SourceMode.Lz,
+            SourceMode.Bf,
+            SourceMode.Md,
             SourceMode.Agedm,
-            SourceMode.Jzacg,
-            SourceMode.Girigiri,
-            SourceMode.Gugufan,
+            SourceMode.Silisili,
         )
     }
 
@@ -261,6 +264,7 @@ class SourceResolver @Inject constructor(
                         mode = mode,
                         queries = queries,
                         aliases = allAliases,
+                        title = title,
                         expectedEpisodes = expectedEpisodes,
                         deadlineAt = System.currentTimeMillis() + budget,
                     )
@@ -380,6 +384,7 @@ class SourceResolver @Inject constructor(
                 batch = batch,
                 queries = queries,
                 aliases = allAliases,
+                title = title,
                 expectedEpisodes = expectedEpisodes,
                 deadlineMillis = deadlineMillis,
                 onStart = { mode ->
@@ -472,7 +477,7 @@ class SourceResolver @Inject constructor(
 
             val episode = try {
                 withTimeoutOrNull(minOf(EPISODE_PER_SOURCE_TIMEOUT_MS, remaining)) {
-                    findEpisode(mode, queries, target, allAliases)
+                    findEpisode(mode, queries, target, allAliases, title = title)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -520,6 +525,7 @@ class SourceResolver @Inject constructor(
         batch: List<SourceMode>,
         queries: List<String>,
         aliases: List<String>,
+        title: String,
         expectedEpisodes: Int = 0,
         deadlineMillis: Long,
         onStart: (SourceMode) -> Unit,
@@ -534,6 +540,7 @@ class SourceResolver @Inject constructor(
                         mode = mode,
                         queries = queries,
                         aliases = aliases,
+                        title = title,
                         expectedEpisodes = expectedEpisodes,
                         remaining = deadlineMillis - System.currentTimeMillis(),
                     )
@@ -583,6 +590,7 @@ class SourceResolver @Inject constructor(
         mode: SourceMode,
         queries: List<String>,
         aliases: List<String>,
+        title: String,
         remaining: Long,
         expectedEpisodes: Int = 0,
     ): SourceAttempt {
@@ -594,6 +602,7 @@ class SourceResolver @Inject constructor(
                     mode = mode,
                     queries = queries,
                     aliases = aliases,
+                    title = title,
                     expectedEpisodes = expectedEpisodes,
                     deadlineAt = System.currentTimeMillis() + budget,
                 )
@@ -624,11 +633,24 @@ class SourceResolver @Inject constructor(
         mode: SourceMode,
         queries: List<String>,
         aliases: List<String>,
+        title: String = "",
         expectedEpisodes: Int = 0,
         deadlineAt: Long = System.currentTimeMillis() + PER_SOURCE_TIMEOUT_MS,
     ): ResolvedSource {
-        val state = SourceProbeState(mode, aliases, expectedEpisodes, deadlineAt)
-        for (query in queries) {
+        // 采集源不吃日文原名（实验 0 命中）：只给 Agedm 发，省请求（2026-10-22 tv.9 切片 2）
+        val effectiveQueries = queriesFor(mode, queries)
+        if (effectiveQueries.isEmpty()) {
+            throw NoMatchingSourceException("日文原名仅 Agedm 支持")
+        }
+        val state = SourceProbeState(
+            mode = mode,
+            aliases = aliases,
+            expectedEpisodes = expectedEpisodes,
+            deadlineAt = deadlineAt,
+            title = title,
+            stem = SearchQueries.mainStem(title),
+        )
+        for (query in effectiveQueries) {
             if (!state.canProbeMore()) break
             val source = probeQuery(state, query)
             if (source != null) return source
@@ -669,13 +691,14 @@ class SourceResolver @Inject constructor(
         state.candidateCount += results.size
 
         val ranked = TitleMatcher.rankCandidates(
-            target = query,
+            // 门槛用原始目标标题：主干名查询（「某番 第二季」→「某番」）不能把第一季候选排进来
+            target = state.title.ifBlank { query },
             candidates = results.map { it.title },
             aliases = state.aliases,
         )
         val picked = ranked.firstOrNull()
         // 注意：必须先把整行拼好再 .log()——`"a" + "b".log()` 只会记录最后一段
-        val queryLog = "MATCH query=$query page=1 results=${results.size} " +
+        val queryLog = "MATCH query=$query via=${state.viaOf(query)} page=1 results=${results.size} " +
             "picked=${picked?.title?.take(40) ?: "-"} score=${picked?.score ?: "-"}"
         queryLog.log("BehaviorTrace")
 
@@ -709,6 +732,18 @@ class SourceResolver @Inject constructor(
             val rank = index + 1
             if (state.verifications > 0 && state.budgetLeft() < MIN_VERIFY_BUDGET_MS) return null
 
+            // 门槛与打分都用「原始目标标题」，不用当前查询词：
+            // 主干名查询（「某番 第二季」→「某番」）若用查询词做校验，会把第一季候选当成命中。
+            val targetTitle = state.title.ifBlank { query }
+
+            // 采集站库存杂（解说/预告/合集/剧场版…）：候选含排除词而目标不含 → 不验详情（tv.9 切片 2）
+            if (TitleMatcher.isJunkCandidate(targetTitle, candidate.title)) {
+                state.setReason("杂项条目")
+                state.noteReject(candidate.title, "杂项条目", trusted = false)
+                "MATCH reject junk=${candidate.title.take(40)}".log("BehaviorTrace")
+                continue
+            }
+
             val detailUrl = results[candidate.index].url
             if (!state.markVerified(detailUrl)) continue
             if (rank > 1) "MATCH verify fallback rank=$rank".log("BehaviorTrace")
@@ -728,11 +763,13 @@ class SourceResolver @Inject constructor(
             val detail = toResolvedDetail(bean)
             // 详情标题为空时退回搜索页标题，避免「标题空 → 归一化空 → 被判不可信」误杀
             val detailTitle = detail.title.ifBlank { candidate.title }
+            // 采集源有站点总集数（vod_total）时优先用它打分；番剧站没有该字段，退回实际剧集数
+            val episodeCount = if (bean.totalEpisodes > 0) bean.totalEpisodes else detail.episodes.size
             val detailScore = TitleMatcher.score(
-                target = query,
+                target = targetTitle,
                 candidate = detailTitle,
                 aliases = state.aliases,
-                episodeCount = detail.episodes.size,
+                episodeCount = episodeCount,
                 expectedEpisodes = state.expectedEpisodes,
                 rank = candidate.index + 1,
             )
@@ -760,21 +797,49 @@ class SourceResolver @Inject constructor(
         queries: List<String>,
         target: String,
         aliases: List<String>,
+        title: String = "",
     ): ResolvedEpisode {
+        // 与 findSource 同一套口径：日文原名只发给 Agedm
+        val effectiveQueries = queriesFor(mode, queries)
+        if (effectiveQueries.isEmpty()) {
+            throw NoMatchingSourceException("日文原名仅 Agedm 支持")
+        }
         var lastReason = "没有匹配条目"
-        for (query in queries) {
+        for (query in effectiveQueries) {
+            // 门槛用原始目标标题（与详情选源一致），避免主干名查询把第一季当命中
+            val targetTitle = title.ifBlank { query }
             val results = animeApi.getSearchData(query, 1, mode)
-            val best = TitleMatcher.rankCandidates(query, results.map { it.title }, aliases)
+            val best = TitleMatcher.rankCandidates(targetTitle, results.map { it.title }, aliases)
                 .firstOrNull()
             if (best == null) {
                 lastReason = "搜索无匹配"
                 continue
             }
             val match = results[best.index]
+            if (TitleMatcher.isJunkCandidate(targetTitle, match.title)) {
+                lastReason = "杂项条目"
+                continue
+            }
             val detail = animeApi.getAnimeDetail(match.url, mode)
+            val detailTitle = detail.title.ifBlank { match.title }
+            if (TitleMatcher.isJunkCandidate(targetTitle, detailTitle)) {
+                lastReason = "杂项条目"
+                continue
+            }
             val episodes = primaryEpisodes(detail).map { it.toEpisode() }
             if (episodes.isEmpty()) {
                 lastReason = "详情无剧集"
+                continue
+            }
+            // 详情标题复核：搜索标题通过不代表详情是同一条目（与 verifyCandidates 同口径）
+            if (TitleMatcher.score(
+                    target = targetTitle,
+                    candidate = detailTitle,
+                    aliases = aliases,
+                    episodeCount = if (detail.totalEpisodes > 0) detail.totalEpisodes else episodes.size,
+                ) == null
+            ) {
+                lastReason = "详情标题不符"
                 continue
             }
             val episodeIndex = episodes.indexOfFirst { episode ->
@@ -858,12 +923,29 @@ class SourceResolver @Inject constructor(
     ): List<String> =
         SearchQueries.build(title, originalTitle, aliases, max = MAX_QUERIES)
 
+    /**
+     * 按源区分查询词（2026-10-22 tv.9 切片 2）：采集源不吃日文原名（实验 0 命中），
+     * 含假名的查询只发给 Agedm；其余源跳过并记日志，省请求。
+     */
+    private fun queriesFor(mode: SourceMode, queries: List<String>): List<String> {
+        if (mode == SourceMode.Agedm) return queries
+        return queries.filterNot { query ->
+            val japanese = isJapaneseText(query)
+            if (japanese) {
+                "MATCH query skip jp mode=$mode query=$query".log("BehaviorTrace")
+            }
+            japanese
+        }
+    }
+
     /** 源内探测的累计状态：诊断计数、验证次数、剩余预算；只在单源协程内使用 */
     private class SourceProbeState(
         val mode: SourceMode,
         val aliases: List<String>,
         val expectedEpisodes: Int,
         private val deadlineAt: Long,
+        val title: String = "",
+        val stem: String? = null,
     ) {
         var queriesTried = 0
         var candidateCount = 0
@@ -871,6 +953,15 @@ class SourceResolver @Inject constructor(
         var lastReason: String? = null
         var nearestCandidate: String? = null
         var rejectReason: String? = null
+
+        /** 这个查询词属于哪一路：全名 / 主干名 / 别名 / 日文原名 / 其他（只用于日志） */
+        fun viaOf(query: String): String = when {
+            query == title -> "full"
+            query == stem -> "main"
+            query in aliases -> "alias"
+            isJapaneseText(query) -> "jp"
+            else -> "other"
+        }
 
         private val verifiedUrls = mutableSetOf<String>()
         private var nearestIsTrusted = false

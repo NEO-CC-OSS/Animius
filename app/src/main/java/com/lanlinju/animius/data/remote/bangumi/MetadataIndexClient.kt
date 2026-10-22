@@ -1,6 +1,7 @@
 package com.lanlinju.animius.data.remote.bangumi
 
 import android.content.Context
+import com.lanlinju.animius.domain.matching.TitleMatcher
 import com.lanlinju.animius.util.log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.ktor.client.HttpClient
@@ -64,6 +65,36 @@ class MetadataIndexClient @Inject constructor(
 
     /** 进程内已加载过就直接取；没加载过返回 null（调用方可用 [loadItem]） */
     fun findItem(id: Long): MetadataItem? = lastIndex?.items?.get(id)
+
+    /**
+     * 用站点标题在本地轻包里反查元数据条目（tv.9 切片 3 混合详情）。
+     *
+     * 只查内存（不发网络、不加载轻包）：首页/周表打开过就命中，没加载过返回 null，
+     * 详情页此时回退纯源站展示。标题与别名都按 [TitleMatcher.normalize] 归一化比较；
+     * 同一部番多季时按季数区分（避免把第一季的标题/封面挂到第二季页面）。
+     */
+    fun findByTitle(title: String): MetadataItem? {
+        val key = TitleMatcher.normalize(title)
+        if (key.isEmpty()) return null
+        val index = lastIndex ?: return null
+        val targetSeason = TitleMatcher.seasonOf(title)
+        val candidates = index.items.values.filter { item ->
+            TitleMatcher.normalize(item.title) == key ||
+                item.aliases.any { alias -> TitleMatcher.normalize(alias) == key }
+        }
+        if (candidates.isEmpty()) return null
+        return candidates.firstOrNull { it.title == title }
+            ?: candidates.firstOrNull { TitleMatcher.seasonOf(it.title) == targetSeason }
+            ?: candidates.firstOrNull { seasonMatches(targetSeason, TitleMatcher.seasonOf(it.title)) }
+    }
+
+    /** 与 TitleMatcher 的季标兼容规则一致（目标没写季标 = 第一季） */
+    private fun seasonMatches(target: Int?, candidate: Int?): Boolean = when {
+        target == candidate -> true
+        target == null -> candidate == 1
+        candidate == null -> target == 1
+        else -> false
+    }
 
     /**
      * 按 Bangumi id 取元数据详情。

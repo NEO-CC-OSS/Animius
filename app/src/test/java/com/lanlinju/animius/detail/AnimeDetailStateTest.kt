@@ -30,8 +30,8 @@ class AnimeDetailStateTest {
     )
 
     @Test
-    fun `tv with metadata shows the skeleton before any source result`() {
-        val state = AnimeDetailState.initial(meta, isTv = true)
+    fun `metadata always shows the skeleton before any source result`() {
+        val state = AnimeDetailState.initial(meta)
 
         assertTrue(state is Resource.Success)
         val detail = state.data
@@ -42,23 +42,15 @@ class AnimeDetailStateTest {
     }
 
     @Test
-    fun `mobile never gets a skeleton`() {
-        val state = AnimeDetailState.initial(meta, isTv = false)
-
-        assertTrue(state is Resource.Loading)
-        assertNull(state.data)
-    }
-
-    @Test
-    fun `tv without metadata keeps the original loading state`() {
-        val state = AnimeDetailState.initial(meta = null, isTv = true)
+    fun `without metadata keeps the original loading state`() {
+        val state = AnimeDetailState.initial(meta = null)
 
         assertTrue(state is Resource.Loading)
     }
 
     @Test
     fun `resolve failure keeps the skeleton on screen`() {
-        val skeleton = AnimeDetailState.initial(meta, isTv = true)
+        val skeleton = AnimeDetailState.initial(meta)
 
         val afterFailure = AnimeDetailState.onResolveFailure(skeleton, "Skr: 搜索无匹配")
 
@@ -77,7 +69,7 @@ class AnimeDetailStateTest {
 
     @Test
     fun `retry with a skeleton only reruns source resolution`() {
-        val skeleton = AnimeDetailState.initial(meta, isTv = true)
+        val skeleton = AnimeDetailState.initial(meta)
 
         assertEquals(AnimeDetailState.RetryPlan.ResolveOnly, AnimeDetailState.onRetry(skeleton))
     }
@@ -140,7 +132,6 @@ class AnimeDetailStateTest {
     fun `skeleton title falls back to the route title when metadata title is blank`() {
         val state = AnimeDetailState.initial(
             meta = meta.copy(title = ""),
-            isTv = true,
             fallbackTitle = "路由标题",
         )
 

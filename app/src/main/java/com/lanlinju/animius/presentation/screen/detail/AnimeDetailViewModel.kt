@@ -24,13 +24,11 @@ import com.lanlinju.animius.presentation.navigation.Screen
 import com.lanlinju.animius.util.KEY_USE_DOWNLOAD_DIRECTORY
 import com.lanlinju.animius.util.Resource
 import com.lanlinju.animius.util.SourceMode
-import com.lanlinju.animius.util.isAndroidTV
 import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.onSuccess
 import com.lanlinju.animius.util.preferences
 import com.lanlinju.download.download
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.DelicateCoroutinesApi
@@ -74,7 +72,6 @@ sealed interface SourceInfoState {
 @HiltViewModel
 class AnimeDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
-    @ApplicationContext appContext: Context,
     private val animeRepository: AnimeRepository,
     private val roomRepository: RoomRepository,
     private val getAnimeDetailUseCase: GetAnimeDetailUseCase,
@@ -82,12 +79,10 @@ class AnimeDetailViewModel @Inject constructor(
     private val metadataIndexClient: MetadataIndexClient,
 ) : ViewModel() {
 
-    /** 骨架态 / 并发选源只在 TV 上生效；手机/平板保持 tv.6 行为（整页 Loading + 串行选源） */
-    private val isTv: Boolean = isAndroidTV(appContext)
-
     /**
      * 页面内容：`Success(骨架)`（只有元数据）→ `Success(合并后完整详情)`。
      * 选源失败不再把整页置 Error——有骨架就保留骨架，失败原因走 [sourceInfo]。
+     * 2026-10-22 设备统一：骨架与并发选源对所有设备生效（手机/平板不再走 tv.6 的整页 Loading）。
      */
     private val _metadataDetailState: MutableStateFlow<Resource<AnimeDetail?>> =
         MutableStateFlow(value = Resource.Loading)
@@ -123,6 +118,9 @@ class AnimeDetailViewModel @Inject constructor(
 
     private val metadataTitle: String
     private var metadataItem: MetadataItem? = null
+
+    /** 源站入口的元数据反查只做一次（Room Flow 会多次 emit） */
+    private var metadataLookupDone = false
 
     /** Bangumi id：播放失败时清缓存、换源成功后写回 */
     val metadataId: Long
@@ -197,8 +195,8 @@ class AnimeDetailViewModel @Inject constructor(
                 return@launch
             }
 
-            // 骨架：元数据全在本地 index 里，不等任何源站请求先出页面（仅 TV；手机/平板保持原行为）
-            val skeletonState = AnimeDetailState.initial(item, isTv, fallbackTitle = title)
+            // 骨架：元数据全在本地 index 里，不等任何源站请求先出页面（所有设备统一）
+            val skeletonState = AnimeDetailState.initial(item, fallbackTitle = title)
             if (skeletonState.data != null) {
                 _metadataDetailState.value = skeletonState
                 _isSkeleton.value = true
@@ -206,28 +204,16 @@ class AnimeDetailViewModel @Inject constructor(
                 "DETAIL skeleton shown id=$metadataId title=$title".log("BehaviorTrace")
             }
 
-            // TV 走并发（上限 3，先成功后取消其余）；手机/平板保持串行，行为与 tv.6 一致
-            val result = if (isTv) {
-                sourceResolver.resolveConcurrent(
-                    title = title,
-                    originalTitle = item?.originalTitle.orEmpty(),
-                    aliases = item?.aliases.orEmpty(),
-                    expectedEpisodes = item?.totalEpisodes ?: 0,
-                    metadataId = metadataId,
-                    currentMode = mode,
-                    onProgress = ::onResolveProgress,
-                )
-            } else {
-                sourceResolver.resolve(
-                    title = title,
-                    originalTitle = item?.originalTitle.orEmpty(),
-                    aliases = item?.aliases.orEmpty(),
-                    expectedEpisodes = item?.totalEpisodes ?: 0,
-                    metadataId = metadataId,
-                    currentMode = mode,
-                    onProgress = ::onResolveProgress,
-                )
-            }
+            // 并发选源（上限 3，先成功后取消其余）：所有设备统一，不再区分串行/并发
+            val result = sourceResolver.resolveConcurrent(
+                title = title,
+                originalTitle = item?.originalTitle.orEmpty(),
+                aliases = item?.aliases.orEmpty(),
+                expectedEpisodes = item?.totalEpisodes ?: 0,
+                metadataId = metadataId,
+                currentMode = mode,
+                onProgress = ::onResolveProgress,
+            )
 
             when (result) {
                 is SourceResolveResult.Success -> {
@@ -311,9 +297,25 @@ class AnimeDetailViewModel @Inject constructor(
     private fun getAnimeDetail(detailUrl: String) {
         viewModelScope.launch {
             _isFavourite.value = roomRepository.checkFavourite(detailUrl).first()
-            getAnimeDetailUseCase(detailUrl, mode).collect {
-                _metadataDetailState.value = it
-                "DETAIL mode=$mode url=$detailUrl state=${it::class.simpleName}".log("BehaviorTrace")
+            getAnimeDetailUseCase(detailUrl, mode).collect { state ->
+                val merged = if (state is Resource.Success) {
+                    val detail = state.data!!
+                    // 混合详情（tv.9 切片 3）：源站标题在本地轻包反查元数据，
+                    // 命中则标题/封面/简介/标签/相关推荐用元数据，剧集仍是源站；反查不到纯源站展示。
+                    // 只查一次：Room 的剧集/历史 Flow 会多次 emit，重复全量遍历没有意义。
+                    if (!metadataLookupDone) {
+                        metadataLookupDone = true
+                        metadataItem = metadataIndexClient.findByTitle(detail.title)
+                        if (metadataItem != null) {
+                            "DETAIL metadata matched title=${detail.title}".log("BehaviorTrace")
+                        }
+                    }
+                    Resource.Success(applyMetadata(detail))
+                } else {
+                    state
+                }
+                _metadataDetailState.value = merged
+                "DETAIL mode=$mode url=$detailUrl state=${state::class.simpleName}".log("BehaviorTrace")
             }
         }
     }

@@ -42,7 +42,7 @@ class SourceResolverConcurrentTest {
         val api = FakeAnimeApi(
             search = { mode, _ ->
                 when (mode) {
-                    SourceMode.Silisili -> {
+                    SourceMode.Bf -> {
                         delay(30)
                         listOf(AnimeBean("测试番", "", "https://silisili/1"))
                     }
@@ -63,14 +63,14 @@ class SourceResolverConcurrentTest {
 
         val result = SourceResolver(api, FakeStore()).resolveConcurrent(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
         )
 
         assertTrue(result is SourceResolveResult.Success)
         result as SourceResolveResult.Success
-        assertEquals(SourceMode.Silisili, result.source.mode)
+        assertEquals(SourceMode.Bf, result.source.mode)
         assertFalse(result.fromCache)
         // 慢源被取消：不会跑完
         assertFalse(slowFinished.get())
@@ -82,14 +82,14 @@ class SourceResolverConcurrentTest {
 
         val result = SourceResolver(api, FakeStore()).resolveConcurrent(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
         )
 
         assertTrue(result is SourceResolveResult.Failure)
         result as SourceResolveResult.Failure
-        assertEquals(6, result.attempts.size)
+        assertEquals(5, result.attempts.size)
         assertTrue(result.attempts.all { it.reason == "搜索无匹配" })
     }
 
@@ -114,7 +114,7 @@ class SourceResolverConcurrentTest {
         val result = SourceResolver(api, store).resolveConcurrent(
             title = "测试番",
             metadataId = 42,
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
             onProgress = { progress += it },
@@ -140,7 +140,7 @@ class SourceResolverConcurrentTest {
 
         val result = SourceResolver(api, FakeStore()).resolveConcurrent(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
             maxConcurrency = 3,
@@ -160,7 +160,7 @@ class SourceResolverConcurrentTest {
 
         val result = SourceResolver(api, FakeStore()).resolveConcurrent(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
             maxConcurrency = 3,
@@ -169,9 +169,9 @@ class SourceResolverConcurrentTest {
 
         assertTrue(result is SourceResolveResult.Failure)
         result as SourceResolveResult.Failure
-        assertEquals(6, result.attempts.size)
+        assertEquals(5, result.attempts.size)
         // 3 → 2 → 1（串行）：连续风控后每批都降一档
-        assertEquals(listOf(3, 2, 1), progress.map { it.concurrency }.distinct())
+        assertEquals(listOf(3, 2), progress.map { it.concurrency }.distinct())
     }
 
     @Test
@@ -181,7 +181,7 @@ class SourceResolverConcurrentTest {
 
         SourceResolver(api, FakeStore()).resolveConcurrent(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
             maxConcurrency = 3,
@@ -201,7 +201,7 @@ class SourceResolverConcurrentTest {
         val api = FakeAnimeApi(
             search = { mode, _ ->
                 when (mode) {
-                    SourceMode.Skr, SourceMode.Silisili ->
+                    SourceMode.Lz, SourceMode.Bf ->
                         throw IllegalStateException("HTTP 403 Forbidden")
 
                     else -> emptyList()
@@ -212,7 +212,7 @@ class SourceResolverConcurrentTest {
 
         val result = SourceResolver(api, FakeStore()).resolveConcurrent(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = deadline,
             maxConcurrency = 3,
@@ -221,7 +221,7 @@ class SourceResolverConcurrentTest {
 
         assertTrue(result is SourceResolveResult.Failure)
         result as SourceResolveResult.Failure
-        assertEquals(6, result.attempts.size)
+        assertEquals(5, result.attempts.size)
         // 第 1 批 2×403 + 1×无匹配 → 降到 2；第 2 批业务性失败不再降
         assertEquals(listOf(3, 2), progress.map { it.concurrency }.distinct())
     }
@@ -243,7 +243,7 @@ class SourceResolverConcurrentTest {
 
         val result = SourceResolver(api, FakeStore()).resolveConcurrent(
             title = "测试番",
-            currentMode = SourceMode.Skr,
+            currentMode = SourceMode.Lz,
             now = now,
             deadlineMillis = System.currentTimeMillis() + 600,
             maxConcurrency = 3,
@@ -252,7 +252,7 @@ class SourceResolverConcurrentTest {
         val elapsed = System.currentTimeMillis() - startedAt
         assertTrue(result is SourceResolveResult.Failure)
         result as SourceResolveResult.Failure
-        assertEquals(6, result.attempts.size)
+        assertEquals(5, result.attempts.size)
         assertTrue("耗时 $elapsed ms 超过预算", elapsed < 3_000)
     }
 
@@ -264,7 +264,7 @@ class SourceResolverConcurrentTest {
         val result = withTimeoutOrNull(5_000) {
             SourceResolver(api, FakeStore()).resolveConcurrent(
                 title = "测试番",
-                currentMode = SourceMode.Skr,
+                currentMode = SourceMode.Lz,
                 now = now,
                 deadlineMillis = deadline,
                 maxConcurrency = 3,
@@ -275,7 +275,7 @@ class SourceResolverConcurrentTest {
         assertNotNull("并发批次挂死（onProgress 抛异常后没有回传结果）", result)
         assertTrue(result is SourceResolveResult.Failure)
         result as SourceResolveResult.Failure
-        assertEquals(6, result.attempts.size)
+        assertEquals(5, result.attempts.size)
     }
 
     private fun detailBean(title: String, vararg episodes: Pair<String, String>) = AnimeDetailBean(
