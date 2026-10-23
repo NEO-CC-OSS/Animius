@@ -6,9 +6,11 @@ import android.content.pm.ActivityInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.os.Build
 import android.view.OrientationEventListener
 import android.view.Window
 import androidx.annotation.OptIn
+import androidx.annotation.RequiresApi
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
@@ -338,17 +340,38 @@ class VideoPlayerStateImpl(
         }
     }
 
-    private val focusRequest =
-        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).run {
-            setAudioAttributes(AudioAttributes.Builder().run {
-                setUsage(AudioAttributes.USAGE_MEDIA)
-                setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                build()
-            })
-            setAcceptsDelayedFocusGain(true)
-            setOnAudioFocusChangeListener(audioFocusChangeListener)
-            build()
+    /**
+     * 音频焦点请求对象：API 26+ 用 AudioFocusRequest，低版本走老接口。
+     *
+     * 这里故意用 Any 存（而不是 AudioFocusRequest?）：minSdk 24 的机器上没有 AudioFocusRequest 这个类，
+     * 字段类型/属性初始化一旦引用它，类加载阶段就会 ClassNotFoundException —— 7.0 上点开播放页直接崩（2026-10-23 实测）。
+     * 真正的 API 26 代码全部关在 [AudioFocusApi26] 里，只有版本判断通过才会加载那个类。
+     */
+    private var focusRequest: Any? = null
+
+    private fun requestAudioFocusCompat() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            focusRequest = AudioFocusApi26.request(audioManager, audioFocusChangeListener)
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.requestAudioFocus(
+                audioFocusChangeListener,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+            )
         }
+    }
+
+    private fun abandonAudioFocusCompat() {
+        val request = focusRequest
+        focusRequest = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && request != null) {
+            AudioFocusApi26.abandon(audioManager, request)
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.abandonAudioFocus(audioFocusChangeListener)
+        }
+    }
 
     private val orientationEventListener = object : OrientationEventListener(context) {
         private var currentOrientation = 270
@@ -398,16 +421,53 @@ class VideoPlayerStateImpl(
         if (isAutoOrientation) {
             orientationEventListener.enable()
         }
-        audioManager.requestAudioFocus(focusRequest)
+        requestAudioFocusCompat()
     }
 
     override fun unregisterListener() {
         if (isAutoOrientation) {
             orientationEventListener.disable()
         }
-        audioManager.abandonAudioFocusRequest(focusRequest)
+        abandonAudioFocusCompat()
     }
 
+}
+
+/**
+ * 音频焦点请求的 API 26+ 实现。
+ *
+ * **单独放在一个类里是刻意的**：Android 7.x（minSdk 24）没有 `AudioFocusRequest`，
+ * 只要主类在类加载/属性初始化阶段引用了它就会 `ClassNotFoundException`。
+ * 嵌套类只有第一次被调用时才加载，而调用点都在 `SDK_INT >= 26` 分支内，低版本永远碰不到。
+ */
+private object AudioFocusApi26 {
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    fun request(
+        audioManager: AudioManager,
+        listener: AudioManager.OnAudioFocusChangeListener,
+    ): Any {
+        val attributes = AudioAttributes.Builder().run {
+            setUsage(AudioAttributes.USAGE_MEDIA)
+            setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+            build()
+        }
+        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).run {
+            setAudioAttributes(attributes)
+            setAcceptsDelayedFocusGain(true)
+            setOnAudioFocusChangeListener(listener)
+            build()
+        }
+        audioManager.requestAudioFocus(request)
+        return request
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    fun abandon(audioManager: AudioManager, request: Any) {
+        if (request is AudioFocusRequest) {
+            audioManager.abandonAudioFocusRequest(request)
+        }
+    }
 }
 
 
