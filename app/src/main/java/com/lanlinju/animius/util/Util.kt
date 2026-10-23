@@ -106,6 +106,17 @@ private fun getDebugInfo(context: Context): String {
 }
 
 private fun getWebViewVersion(context: Context): String {
+    // WebView#getCurrentWebViewPackage 是 API 26 API；Android 7.x（minSdk 24）上没有它，
+    // 直接调用会 NoSuchMethodError，而这里只是崩溃日志的附加信息，不能因此再崩一次。
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+        // 7.x 盒子上 AOSP WebView（com.android.webview）与 Google 版（com.google.android.webview）都常见，
+        // 两个都试；都查不到才落到 unknown——这里只是崩溃日志的附加信息，不允许再崩一次。
+        val versionName = listOf("com.google.android.webview", "com.android.webview")
+            .firstNotNullOfOrNull { pkg ->
+                runCatching { context.packageManager.getPackageInfo(pkg, 0).versionName }.getOrNull()
+            }
+        return versionName ?: "unknown (API < 26)"
+    }
     val webView = WebView.getCurrentWebViewPackage() ?: return "how did you get here?"
     val pm = context.packageManager
     val label = webView.applicationInfo!!.loadLabel(pm)
