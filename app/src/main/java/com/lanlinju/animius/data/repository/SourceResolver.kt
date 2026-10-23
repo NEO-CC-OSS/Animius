@@ -12,6 +12,7 @@ import com.lanlinju.animius.domain.matching.isJapaneseText
 import com.lanlinju.animius.domain.model.AnimeDetail
 import com.lanlinju.animius.domain.model.Episode
 import com.lanlinju.animius.util.SourceMode
+import com.lanlinju.animius.util.SourceRiskMemory
 import com.lanlinju.animius.util.SourceRiskSignal
 import com.lanlinju.animius.util.log
 import java.time.Instant
@@ -93,7 +94,8 @@ sealed interface EpisodeResolveResult {
 /**
  * 「元数据标题 → 可用源」解析。
  *
- * 候选顺序：当前源优先（尊重用户选择），其余按固定顺序兜底；已知长期打不开的源排最后。
+ * 候选顺序：当前源优先（尊重用户选择），其余按固定顺序兜底；已知长期打不开的源排最后；
+ * 2 小时内被风控（403/验证码）过的源再往后排（只影响排序、不剔除，见 [SourceRiskMemory]）。
  * 每个源有独立时间预算，整体有总预算，避免一个坏源拖住整次点播。
  * 匹配规则见 [TitleMatcher]：宁可找不到源，也不能进错番。
  *
@@ -191,8 +193,23 @@ class SourceResolver @Inject constructor(
         )
     }
 
-    fun candidates(currentMode: SourceMode, exclude: Set<SourceMode> = emptySet()): List<SourceMode> =
-        (listOf(currentMode) + FALLBACK_ORDER).distinct().filterNot { it in exclude }
+    fun candidates(currentMode: SourceMode, exclude: Set<SourceMode> = emptySet()): List<SourceMode> {
+        val modes = (listOf(currentMode) + FALLBACK_ORDER).distinct().filterNot { it in exclude }
+        // 风控软跳过（2026-10-23 批次 2）：2 小时内被拦过的源排到最后；用户明确选的当前源不受影响
+        val risked = modes.filter { SourceRiskMemory.isRecent(it) }.toSet()
+        return SourceRiskMemory.order(modes, risked, current = currentMode)
+    }
+
+    /**
+     * 风控软跳过：**单个源失败时即时**写记忆（不是等整轮失败——「当前源 403、兜底源顶上」
+     * 这种最常见情况也必须记住，否则下一轮还会先撞同一个 403）。
+     * 业务性失败（无匹配/超时）不记，见 [SourceRiskSignal.isRiskControl]。
+     */
+    private fun markRiskIfNeeded(mode: SourceMode, reason: String?) {
+        if (!SourceRiskSignal.isRiskControl(reason)) return
+        SourceRiskMemory.mark(mode)
+        "SOURCE risk remembered mode=$mode reason=${reason.orEmpty().take(60)}".log("BehaviorTrace")
+    }
 
     /**
      * 解析一部番在哪个源可看。
@@ -283,6 +300,7 @@ class SourceResolver @Inject constructor(
                 if (attempts.none { it.mode == mode }) {
                     attempts += SourceAttemptFailure(mode, "超时")
                 }
+                attempts.lastOrNull { it.mode == mode }?.let { markRiskIfNeeded(mode, it.reason) }
                 continue
             }
 
@@ -413,6 +431,9 @@ class SourceResolver @Inject constructor(
                 return@withContext SourceResolveResult.Success(source, fromCache = false)
             }
 
+            // 2.5) 风控软跳过：本批每个风控失败都即时写记忆（不等整轮失败）
+            outcome.failures.forEach { markRiskIfNeeded(it.mode, it.reason) }
+
             // 3) 风控降级：本批无成功（走到这里就说明没有成功源）且风控失败 ≥2 才算「连续风控」；
             //    2 个 403 混 1 个超时同样累计，不再被整批口径清零
             val riskFailures = outcome.failures.count { SourceRiskSignal.isRiskControl(it.reason) }
@@ -490,6 +511,7 @@ class SourceResolver @Inject constructor(
                 if (attempts.none { it.mode == mode }) {
                     attempts += SourceAttemptFailure(mode, "超时")
                 }
+                attempts.lastOrNull { it.mode == mode }?.let { markRiskIfNeeded(mode, it.reason) }
                 continue
             }
 
