@@ -31,6 +31,7 @@ hiltNavigation = "1.2.0"
 splashscreen = "1.0.1"
 jsoup = "1.21.1"
 workRuntimeKtx = "2.10.2"
+desugarJdkLibs = "2.1.5"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -96,6 +97,9 @@ coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil" }
 
 # jsoup
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
+
+# core library desugaring（java.time 等 API 26 API 在低版本可用）
+desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 
 # network
 okhttp-bom = { module = "com.squareup.okhttp3:okhttp-bom", version.ref = "okhttpBom" }

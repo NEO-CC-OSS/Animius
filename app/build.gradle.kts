@@ -77,6 +77,9 @@ android {
         }
     }
     compileOptions {
+        // core library desugaring：让 java.time 等 API 26 API 在 minSdk 24（Android 7.0）上可用。
+        // 关掉它会在低版本运行时抛 NoClassDefFoundError（java.time.*）。
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -97,6 +100,8 @@ android {
 }
 
 dependencies {
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
+
     implementation(project(":video-player"))
     implementation(project(":download"))
     implementation(project(":danmaku"))
