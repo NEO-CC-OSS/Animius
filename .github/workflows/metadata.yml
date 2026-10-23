@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: metadata-calendar
@@ -824,6 +825,16 @@ jobs:
               cover_info = make_cover_info(jobs, args.covers_dir, args)
               index, index_size, trim_stats = enforce_index_limit(calendar, cover_info, args)
 
+              # 裁剪可见化（P0）：把丢弃统计写进产物，日报/告警可读。
+              # 客户端解析忽略未知字段，不影响 App；写入后重新核对体积，超限就不写。
+              if trim_stats:
+                  trimmed = dict(trim_stats)
+                  trimmed["index_bytes"] = index_size
+                  trimmed["limit"] = args.index_limit
+                  index["trim"] = trimmed
+                  if json_bytes(index) > args.index_limit:
+                      index.pop("trim", None)
+
               legacy = build_legacy(calendar, args.covers_dir, args)
 
               dump_json(args.out_index, index)
@@ -1056,6 +1067,52 @@ jobs:
             --tags-cap 10 --aliases-cap 8 \
             --index-limit 400000
 
+      - name: Build sources.json
+        run: |
+          set -euo pipefail
+          # 源域名清单：从 App 源码的 CANDIDATE_DOMAINS 解析，保持「App 是唯一事实来源」。
+          # 客户端只在「内置候选域名全失败」时才按需拉取（见 docs/tasks/adhoc/02-P0数据自维护.md）。
+          python3 - <<'PY'
+          import datetime
+          import json
+          import os
+          import re
+
+          BASE = "app/src/main/java/com/lanlinju/animius/data/remote/parse"
+          FILES = {"Lz": "LzSource.kt", "Bf": "BfSource.kt", "Md": "MdSource.kt"}
+          sources = {}
+          for tag, name in FILES.items():
+              path = os.path.join(BASE, name)
+              if not os.path.isfile(path):
+                  print("warn: missing %s" % path)
+                  continue
+              text = open(path, encoding="utf-8").read()
+              match = re.search(r"CANDIDATE_DOMAINS[^=]*=\s*listOf\((.*?)\)", text, re.S)
+              domains = []
+              if match:
+                  domains = [d.strip() for d in re.findall(r'"([^"]+)"', match.group(1))]
+              domains = [d for d in domains if d.startswith("https://")]
+              sources[tag] = {"domains": domains}
+
+          if not sources:
+              raise SystemExit("no sources parsed from App source")
+
+          payload = {
+              "schema": 1,
+              "updated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "sources": sources,
+          }
+          with open("sources.json", "w", encoding="utf-8", newline="\n") as f:
+              json.dump(payload, f, ensure_ascii=False, indent=1)
+              f.write("\n")
+          print("sources.json:", json.dumps(sources, ensure_ascii=False))
+          PY
+          # 自校验：schema 正确、每个源至少一个 https 域名
+          jq -e '.schema == 1' sources.json > /dev/null
+          jq -e '[.sources[] | (.domains | length > 0)] | all' sources.json > /dev/null
+          jq -e '[.sources[].domains[] | startswith("https://")] | all' sources.json > /dev/null
+          echo "sources.json bytes: $(wc -c < sources.json)"
+
       - name: Validate new artifacts
         run: |
           set -euo pipefail
@@ -1205,6 +1262,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           cp -f ../calendar.json calendar.json
           cp -f ../index.json index.json
+          cp -f ../sources.json sources.json
           mkdir -p covers
           if [ -n "$(find ../covers -maxdepth 1 -name '*.webp' -print -quit)" ]; then
             cp -f ../covers/*.webp covers/
@@ -1229,3 +1287,36 @@ jobs:
           fi
           git commit -q -m "metadata: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" metadata
+
+      - name: Publish health summary
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## metadata 生成结果"
+            echo ""
+            if [ -f index.json ]; then
+              echo "- index.json：$(wc -c < index.json) bytes（上限 400000）"
+              echo "- trim：\`$(jq -c '.trim // {}' index.json)\`"
+              echo "- 周表条目：$(jq '[.days[].items[]] | length' index.json)"
+              echo "- 相关推荐：$(jq '.related_subjects | length' index.json) / 高分推荐：$(jq '.featured | length' index.json)"
+              echo "- sources.json：$(jq -c '.sources' sources.json 2>/dev/null || echo '缺失')"
+            else
+              echo "- 未产出 index.json（本轮失败或提前退出）"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          title="metadata 生成失败：$(date -u +%F)"
+          body=$(printf '本次定时任务失败，**没有发布新数据**（客户端继续用上一版）。\n\n- 运行记录：%s/%s/actions/runs/%s\n- 常见原因：Bangumi 接口异常 / 封面下载失败 / 体积或结构校验不通过。\n- 处理：看该次运行日志定位；数据不会变坏，只是停更。\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body" || true
+          else
+            gh issue create --title "$title" --body "$body" || true
+          fi
