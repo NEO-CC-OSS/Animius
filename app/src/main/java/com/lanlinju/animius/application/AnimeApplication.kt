@@ -6,10 +6,12 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import com.lanlinju.animius.util.TlsChainFix
+import com.lanlinju.animius.util.log
 import dagger.hilt.android.HiltAndroidApp
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import java.io.IOException
+import javax.net.ssl.HttpsURLConnection
 
 @HiltAndroidApp
 class AnimeApplication : Application(), ImageLoaderFactory {
@@ -19,6 +21,26 @@ class AnimeApplication : Application(), ImageLoaderFactory {
 
         _instance = this
 
+        installDefaultTlsFactory()
+    }
+
+    /**
+     * 把 TlsChainFix 的严格校验工厂设为**进程默认**的 HttpsURLConnection 工厂。
+     *
+     * 原因（2026-10-23，minSdk 24 实测）：播放器用的 Media3 `DefaultHttpDataSource` 走
+     * `HttpsURLConnection` + 系统信任库，**不经过 OkHttp**，所以 OkHttp/Coil 那边配好的证书补全对它无效。
+     * Android 7.0 的信任库没有 ISRG Root X1（7.1.1 才内置），2026 年源站普遍是
+     * `leaf → YR1/YR2 → ISRG Root YR → ISRG Root X1` 的新 LE 链 → 7.0 上播放必然
+     * "Trust anchor for certification path not found"、视频无限转圈后报加载失败。
+     * 这里只是把同一条严格校验策略（系统先行、补链兜底）铺到 HttpsURLConnection，不降低安全性。
+     */
+    private fun installDefaultTlsFactory() {
+        runCatching {
+            val (socketFactory, _) = TlsChainFix.socketFactoryWithTrustManager()
+            HttpsURLConnection.setDefaultSSLSocketFactory(socketFactory)
+        }.onFailure {
+            "设置默认 TLS 工厂失败，低版本播放可能握手失败: $it".log("TlsChainFix")
+        }
     }
 
     /**

@@ -17,16 +17,23 @@ import javax.net.ssl.X509TrustManager
 /**
  * 证书链补全：部分源站（实测 Mxdm 用 LE YE1、Nyafun 用 LE YE2）TLS 握手时不发中间证书，
  * Android 的严格 PKIX 校验因缺链必挂（SSLHandshakeException），而桌面系统会自动补链所以浏览器能开。
- * 处理：系统默认校验先走；失败时用内置的 Let's Encrypt 公共中间证书再严格验一次，仍失败则抛原始异常。
+ * 处理：系统默认校验先走；失败时用内置的公共证书再严格验一次，仍失败则抛原始异常。
  * 两段都是严格 PKIX、信任锚全部是公共 CA，不降低安全性；站长补发证书后自动回到系统通道。
+ *
+ * 2026-10-23（minSdk 24）补充：**Android 7.0 的信任库没有 ISRG Root X1**（Let's Encrypt 根，
+ * 7.1.1 才内置）。而 2026 年源站普遍换成了 LE 新根链（leaf → YR1/YR2 → ISRG Root YR → ISRG Root X1），
+ * 7.0 上必然 "Trust anchor for certification path not found" —— 播放（ExoPlayer）与封面（Coil）全挂。
+ * 故把 ISRG Root X1 作为公共根一并内置；它是自签根证书，等于把 7.1.1+ 系统自带的能力补回来。
  */
 object TlsChainFix {
 
     private const val TAG = "TlsChainFix"
 
-    // res/raw 内置的 Let's Encrypt 公共中间证书：YE1/YE2 为 2026-09 实测源站缺失，其余为常用款兜底
-    private val EXTRA_CERT_RES_IDS =
-        listOf(R.raw.le_ye1, R.raw.le_ye2, R.raw.le_r10, R.raw.le_r11, R.raw.le_e5, R.raw.le_e6)
+    // res/raw 内置的公共证书：ISRG Root X1（7.0 缺的根）+ Let's Encrypt 常用中间证书（部分源站不发中间证书）
+    private val EXTRA_CERT_RES_IDS = listOf(
+        R.raw.isrg_root_x1,
+        R.raw.le_ye1, R.raw.le_ye2, R.raw.le_r10, R.raw.le_r11, R.raw.le_e5, R.raw.le_e6
+    )
 
     @Volatile
     private var cached: Pair<SSLSocketFactory, X509TrustManager>? = null
