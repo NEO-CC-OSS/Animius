@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import com.lanlinju.animius.util.SettingsPreferences
 import com.lanlinju.animius.util.getSchemeFromSeed
+import com.lanlinju.animius.util.isAndroidTV
 
 private val DarkColorScheme = darkColorScheme(
     primary = Purple80,
@@ -111,7 +112,12 @@ fun AnimeTheme(content: @Composable () -> Unit) {
     val dynamicColor by SettingsPreferences.dynamicColor.collectAsState()
 
     val darkTheme = when (themeModeState) {
-        SettingsPreferences.ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        // TV 默认深色（2026-10-23 用户拍板）：电视都在客厅暗环境看；
+        // 而且 Android 7.x 系统根本没有深色模式，跟着系统走会一直是白底
+        // （7.0 实测被误认为"颜色没加载出来"）。手机/平板继续跟随系统；
+        // 用户在设置里显式选「浅色 / 深色」时仍以用户选择为准。
+        SettingsPreferences.ThemeMode.SYSTEM ->
+            if (isAndroidTV(LocalContext.current)) true else isSystemInDarkTheme()
         SettingsPreferences.ThemeMode.DARK -> true
         else -> false
     }
