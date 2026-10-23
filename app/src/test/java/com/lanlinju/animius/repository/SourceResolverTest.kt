@@ -4,7 +4,6 @@ import com.lanlinju.animius.data.remote.api.AnimeApi
 import com.lanlinju.animius.data.remote.dto.AnimeBean
 import com.lanlinju.animius.data.remote.dto.AnimeDetailBean
 import com.lanlinju.animius.data.remote.dto.EpisodeBean
-import com.lanlinju.animius.data.remote.dto.HomeBean
 import com.lanlinju.animius.data.remote.dto.VideoBean
 import com.lanlinju.animius.data.repository.EpisodeResolveResult
 import com.lanlinju.animius.data.repository.SourceMatch
@@ -452,8 +451,6 @@ class SourceResolverTest {
     ) : AnimeApi {
         val searchCalls = mutableListOf<Pair<SourceMode, String>>()
 
-        override suspend fun getHomeAllData(): List<HomeBean> = emptyList()
-
         override suspend fun getAnimeDetail(detailUrl: String, mode: SourceMode): AnimeDetailBean =
             detail(mode, detailUrl)
 
@@ -468,7 +465,5 @@ class SourceResolverTest {
             searchCalls += mode to query
             return search(mode, query)
         }
-
-        override suspend fun getWeekDate(): Map<Int, List<AnimeBean>> = emptyMap()
     }
 }

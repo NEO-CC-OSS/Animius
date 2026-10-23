@@ -11,6 +11,7 @@ import com.lanlinju.animius.util.log
 import com.lanlinju.animius.util.preferences
 import java.io.File
 import java.net.URLEncoder
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -40,8 +41,8 @@ import org.jsoup.Jsoup
  *   超时类失败不顺延（换域名只会把总耗时翻倍）；
  * - 内置候选试完、或首轮预算耗尽，才按需拉 metadata 分支的 `sources.json`
  *   （常态零请求，24 h 内不重复拉，清单未上线时 404 也记 24 h）；
- * - 顺延成功即更新 [baseUrl]，后续详情/取址自动拼新域名；用户自定义域名始终第一优先，
- *   自动顺延**不写回设置**。
+ * - 顺延成功即更新 [baseUrl]，后续详情/取址自动拼新域名；用户自定义域名**初始**第一优先
+ *   （顺延成功后由实际可用的域名排第一，避免每次先撞死域名），自动顺延**不写回设置**。
  */
 abstract class CmsSource : AnimeSource {
 
@@ -91,13 +92,29 @@ abstract class CmsSource : AnimeSource {
 
     /**
      * 按候选顺序请求 `{domain}{target}`；快速失败换下一个，成功即更新 [baseUrl]。
+     *
+     * 整段顺延（含二次机会拉远程清单）有 [DOMAIN_FAILOVER_BUDGET_MS] 外层预算，**严格小于**上层
+     * `SourceResolver.PER_SOURCE_TIMEOUT_MS`（12 s）：外层超时是后启动、截止更晚，预算相等时永远是
+     * 外层先触发并吞掉「已尝试哪些域名」的文案，所以这里留 2 s 余量让本层先抛出带原因的失败。
+     * 预算耗尽按「全部候选失败」抛，让上层照常换源并展示原因。
      */
     private suspend fun fetchCmsJson(target: String): String {
-        val outcome = failover.fetch(
-            domains = domainCandidates(),
-            fetch = { domain -> fetchText(domain + target) },
-            onExhausted = { tried -> remoteDomains(tried) },
-        )
+        // 超时时 failover 内部的 tried 列表拿不到，这里自己记一份，保证文案能带「已尝试哪些域名」
+        val tried = mutableListOf<String>()
+        val outcome = withTimeoutOrNull(DOMAIN_FAILOVER_BUDGET_MS) {
+            failover.fetch(
+                domains = domainCandidates(),
+                fetch = { domain ->
+                    tried += domain
+                    fetchText(domain + target)
+                },
+                onExhausted = { triedDomains -> remoteDomains(triedDomains) },
+            )
+        } ?: run {
+            val hosts = tried.joinToString("、") { it.substringAfter("://").trimEnd('/') }
+                .ifEmpty { "-" }
+            throw CmsDomainException("${CmsDomainFailover.USER_MESSAGE}（已尝试 $hosts；超时）")
+        }
         val accepted = outcome.domain
         if (accepted != CmsDomainPolicy.canonical(baseUrl)) {
             baseUrl = accepted
@@ -159,6 +176,13 @@ abstract class CmsSource : AnimeSource {
         /** 实测：完整 Chrome UA 更容易触发挑战页，简洁 UA 反而稳定 */
         internal const val SIMPLE_UA = "Mozilla/5.0"
         internal const val REQUEST_TIMEOUT_MS = 10_000L
+
+        /**
+         * 域名顺延（含拉远程清单）的整段预算：**严格小于**上层 `SourceResolver.PER_SOURCE_TIMEOUT_MS`
+         * （12 s）。外层超时是后启动、截止更晚，预算相等时永远是外层先触发，本层拼出的
+         * 「已尝试哪些域名」文案会被吞掉（2026-10-23 独立审查指出）；留 2 s 余量。
+         */
+        private const val DOMAIN_FAILOVER_BUDGET_MS = 10_000L
 
         /** 远程域名清单的缓存目录（filesDir 下，小文件，不进 SharedPreferences） */
         private const val SOURCES_CACHE_DIR = "cms_sources"

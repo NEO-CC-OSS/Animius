@@ -4,7 +4,6 @@ import com.lanlinju.animius.data.remote.api.AnimeApi
 import com.lanlinju.animius.data.remote.dto.AnimeBean
 import com.lanlinju.animius.data.remote.dto.AnimeDetailBean
 import com.lanlinju.animius.data.remote.dto.EpisodeBean
-import com.lanlinju.animius.data.remote.dto.HomeBean
 import com.lanlinju.animius.data.remote.dto.VideoBean
 import com.lanlinju.animius.data.repository.ResolveProgress
 import com.lanlinju.animius.data.repository.SourceMatch
@@ -345,8 +344,6 @@ class SourceResolverRecallTest {
         private val inFlight = AtomicInteger(0)
         val maxInFlight = AtomicInteger(0)
 
-        override suspend fun getHomeAllData(): List<HomeBean> = emptyList()
-
         override suspend fun getAnimeDetail(detailUrl: String, mode: SourceMode): AnimeDetailBean {
             detailCalls += detailUrl
             return detail(mode, detailUrl)
@@ -369,7 +366,5 @@ class SourceResolverRecallTest {
                 inFlight.decrementAndGet()
             }
         }
-
-        override suspend fun getWeekDate(): Map<Int, List<AnimeBean>> = emptyMap()
     }
 }

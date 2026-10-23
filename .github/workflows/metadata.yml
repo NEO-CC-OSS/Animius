@@ -1285,6 +1285,7 @@ jobs:
             calendar.urls.json
             calendar.json
             index.json
+            sources.json
             relations.json
             related_subjects.json
             featured.json

@@ -18,8 +18,9 @@ import kotlinx.serialization.json.contentOrNull
  * ```
  * `sources` 的 key 就是 App 的 `modeTag` 原样大小写（Lz/Bf/Md）。
  *
- * 通道照抄 [MetadataCoverUrls]（清单与封面共用同一套镜像，别自创）：
- * gh-proxy → gcore.jsdelivr → testingcf.jsdelivr；**跳过 api.github.com**（未认证 429 不可依赖）。
+ * 通道集合与 [MetadataCoverUrls] 相同（同一套镜像，别自创），但**顺序有意不同**：
+ * 清单是 1 KB 小文件、gh-proxy 实测最快，所以清单优先 gh-proxy；封面才是 jsDelivr 双域名竞速。
+ * 顺序：gh-proxy → gcore.jsdelivr → testingcf.jsdelivr；**跳过 api.github.com**（未认证 429 不可依赖）。
  */
 internal data class CmsSourcesManifest(
     val updatedAt: String,
@@ -42,8 +43,10 @@ internal data class CmsSourcesManifest(
          * jsDelivr 两个域名：`Couldn't find the requested file /gh/... in ...`
          */
         private val MISSING_MARKERS = listOf(
-            "404",
-            "not found",
+            // 裸 "404" 偏宽：captive portal 短错误页可能只写 404，会被误记 24 h；
+            // 两种真实 404 文案：gh-proxy「404: Not Found」与 nginx 默认页「404 Not Found」（无冒号）
+            "404: not found",
+            "404 not found",
             "couldn't find the requested file",
             "could not find the requested file",
         )

@@ -3,7 +3,6 @@ package com.lanlinju.animius.repository
 import com.lanlinju.animius.data.remote.api.AnimeApi
 import com.lanlinju.animius.data.remote.dto.AnimeBean
 import com.lanlinju.animius.data.remote.dto.AnimeDetailBean
-import com.lanlinju.animius.data.remote.dto.HomeBean
 import com.lanlinju.animius.data.remote.dto.VideoBean
 import com.lanlinju.animius.data.repository.AggregateGroup
 import com.lanlinju.animius.data.repository.AggregateSearch
@@ -82,8 +81,6 @@ class AggregateSearchTest {
         val searchCalls: MutableList<Pair<SourceMode, String>> =
             java.util.Collections.synchronizedList(mutableListOf())
 
-        override suspend fun getHomeAllData(): List<HomeBean> = emptyList()
-
         override suspend fun getAnimeDetail(detailUrl: String, mode: SourceMode): AnimeDetailBean =
             throw IllegalStateException("unused")
 
@@ -98,7 +95,5 @@ class AggregateSearchTest {
             searchCalls += mode to query
             return search(mode, query)
         }
-
-        override suspend fun getWeekDate(): Map<Int, List<AnimeBean>> = emptyMap()
     }
 }

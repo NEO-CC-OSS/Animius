@@ -7,7 +7,6 @@ import com.lanlinju.animius.data.remote.api.AnimeApi
 import com.lanlinju.animius.data.repository.paging.SearchPagingSource
 import com.lanlinju.animius.domain.model.Anime
 import com.lanlinju.animius.domain.model.AnimeDetail
-import com.lanlinju.animius.domain.model.Home
 import com.lanlinju.animius.domain.model.WebVideo
 import com.lanlinju.animius.domain.repository.AnimeRepository
 import com.lanlinju.animius.util.Resource
@@ -25,19 +24,6 @@ import javax.inject.Singleton
 class AnimeRepositoryImpl @Inject constructor(
     private val animeApi: AnimeApi
 ) : AnimeRepository {
-    override suspend fun getHomeData(): Resource<List<Home>> {
-        val response = invokeApi {
-            animeApi.getHomeAllData()
-        }
-        return when (response) {
-            is Resource.Error -> Resource.Error(error = response.error)
-            is Resource.Loading -> Resource.Loading
-            is Resource.Success -> Resource.Success(
-                data = response.data?.map { it.toHome() }.orEmpty()
-            )
-        }
-    }
-
     override suspend fun getAnimeDetail(
         detailUrl: String,
         mode: SourceMode
@@ -65,18 +51,5 @@ class AnimeRepositoryImpl @Inject constructor(
             config = PagingConfig(pageSize = SEARCH_PAGE_SIZE),
             pagingSourceFactory = { SearchPagingSource(api = animeApi, query, mode) }
         ).flow
-    }
-
-    override suspend fun getWeekData(): Resource<Map<Int, List<Anime>>> {
-        val response = invokeApi {
-            animeApi.getWeekDate()
-        }
-        return when (response) {
-            is Resource.Error -> Resource.Error(error = response.error)
-            is Resource.Loading -> Resource.Loading
-            is Resource.Success -> Resource.Success(
-                data = response.data?.mapValues { (_, v) -> v.map { it.toAnime() } } ?: emptyMap()
-            )
-        }
     }
 }

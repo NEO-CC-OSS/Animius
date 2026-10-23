@@ -164,8 +164,12 @@ class CmsSourcesManifestTest {
                     "in NEO-CC-OSS/Animius.",
             ),
         )
+        // nginx 默认 404 页无冒号，也属「文件不存在」
+        assertTrue(CmsSourcesManifest.looksMissing("<title>404 Not Found</title>"))
         assertFalse(CmsSourcesManifest.looksMissing("<html><body>challenge</body></html>"))
         assertFalse(CmsSourcesManifest.looksMissing(""))
+        // 裸 404（无 not found 文案）不再认作「文件不存在」，避免 captive portal 误记 24 h
+        assertFalse(CmsSourcesManifest.looksMissing("404"))
         // 长页面（captive portal / 挑战页）里出现 404 不算「文件不存在」
         assertFalse(CmsSourcesManifest.looksMissing("x".repeat(500) + "404"))
     }
