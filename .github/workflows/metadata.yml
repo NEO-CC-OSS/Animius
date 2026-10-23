@@ -825,15 +825,15 @@ jobs:
               cover_info = make_cover_info(jobs, args.covers_dir, args)
               index, index_size, trim_stats = enforce_index_limit(calendar, cover_info, args)
 
-              # 裁剪可见化（P0）：把丢弃统计写进产物，日报/告警可读。
-              # 客户端解析忽略未知字段，不影响 App；写入后重新核对体积，超限就不写。
-              if trim_stats:
-                  trimmed = dict(trim_stats)
-                  trimmed["index_bytes"] = index_size
-                  trimmed["limit"] = args.index_limit
-                  index["trim"] = trimmed
-                  if json_bytes(index) > args.index_limit:
-                      index.pop("trim", None)
+              # 裁剪可见化：无裁剪也写空对象，保证 index.json 始终带 trim 字段（日报/告警口径统一）
+              trimmed = dict(trim_stats)
+              trimmed["index_bytes"] = index_size
+              trimmed["limit"] = args.index_limit
+              index["trim"] = trimmed
+              if json_bytes(index) > args.index_limit:
+                  # 体积贴着上限时优先保证数据发布，trim 只影响可观测性
+                  index.pop("trim", None)
+                  print("warn: trim dropped from index.json (size limit)")
 
               legacy = build_legacy(calendar, args.covers_dir, args)
 
@@ -843,7 +843,7 @@ jobs:
               print("covers: jobs=%d reused=%d new=%d failed=%d" % (len(jobs), reused, new, failed))
               print(
                   "index bytes=%d (limit %d) legacy bytes=%d manifest entries=%d"
-                  % (index_size, args.index_limit, json_bytes(legacy), len(manifest["covers"]))
+                  % (json_bytes(index), args.index_limit, json_bytes(legacy), len(manifest["covers"]))
               )
               if trim_stats:
                   print("index trim: %s" % json.dumps(trim_stats, sort_keys=True))
@@ -1069,10 +1069,11 @@ jobs:
 
       - name: Build sources.json
         run: |
-          set -euo pipefail
-          # 源域名清单：从 App 源码的 CANDIDATE_DOMAINS 解析，保持「App 是唯一事实来源」。
+          set -uo pipefail
+          # 源域名清单是**增强项**：解析失败绝不能阻断元数据发布（红线：任一步失败都要保留原日历继续发布）。
+          # 从 App 源码的 CANDIDATE_DOMAINS 解析，保持「App 是唯一事实来源」。
           # 客户端只在「内置候选域名全失败」时才按需拉取（见 docs/tasks/adhoc/02-P0数据自维护.md）。
-          python3 - <<'PY'
+          python3 - <<'PY' || echo "::warning::sources.json 解析脚本异常，走沿用上一版逻辑"
           import datetime
           import json
           import os
@@ -1087,11 +1088,20 @@ jobs:
                   print("warn: missing %s" % path)
                   continue
               text = open(path, encoding="utf-8").read()
-              match = re.search(r"CANDIDATE_DOMAINS[^=]*=\s*listOf\((.*?)\)", text, re.S)
-              domains = []
-              if match:
-                  domains = [d.strip() for d in re.findall(r'"([^"]+)"', match.group(1))]
-              domains = [d for d in domains if d.startswith("https://")]
+              anchor = text.find("CANDIDATE_DOMAINS")
+              if anchor < 0:
+                  print("warn: CANDIDATE_DOMAINS not found in %s" % path)
+                  continue
+              # 只取定义处附近的窗口并跳过整行注释：避免注释里的 ASCII ')' 把正则截断
+              window = text[anchor:anchor + 800]
+              body = "\n".join(
+                  line for line in window.splitlines()
+                  if not line.strip().startswith("//")
+              )
+              domains = [d.strip() for d in re.findall(r'"(https://[^"]+)"', body)]
+              if not domains:
+                  print("warn: no https domain in %s" % path)
+                  continue
               sources[tag] = {"domains": domains}
 
           if not sources:
@@ -1107,11 +1117,20 @@ jobs:
               f.write("\n")
           print("sources.json:", json.dumps(sources, ensure_ascii=False))
           PY
-          # 自校验：schema 正确、每个源至少一个 https 域名
-          jq -e '.schema == 1' sources.json > /dev/null
-          jq -e '[.sources[] | (.domains | length > 0)] | all' sources.json > /dev/null
-          jq -e '[.sources[].domains[] | startswith("https://")] | all' sources.json > /dev/null
-          echo "sources.json bytes: $(wc -c < sources.json)"
+          # 尽力而为：解析不到就沿用上一版；校验失败只警告，绝不让元数据断更
+          if [ ! -f sources.json ]; then
+            if [ -f prev/sources.json ]; then
+              cp -f prev/sources.json sources.json
+              echo "::warning::sources.json 解析失败，沿用上一版"
+            else
+              echo "::warning::没有 sources.json（首轮或解析失败），本次不发布该文件"
+            fi
+          fi
+          if [ -f sources.json ]; then
+            jq -e '.schema == 1' sources.json > /dev/null \
+              || echo "::warning::sources.json schema 校验失败，仍发布（客户端会丢弃并回退内置域名）"
+            echo "sources.json bytes: $(wc -c < sources.json)"
+          fi
 
       - name: Validate new artifacts
         run: |
@@ -1161,6 +1180,26 @@ jobs:
           mv index.new.json index.json
           mv calendar.new.json calendar.json
           echo "installed: index.json=$(wc -c < index.json) calendar.json=$(wc -c < calendar.json) covers=$(find covers -maxdepth 1 -name '*.webp' | wc -l)"
+
+      - name: Check trim budget
+        id: trim
+        if: always()
+        run: |
+          set -uo pipefail
+          # 裁剪不阻断发布（数据仍可用），只作为告警信号：丢推荐 >10 条或压缩过简介就提醒。
+          over=0
+          if [ -f index.json ]; then
+            lost=$(jq '(.trim // {}) | ((.orphans // 0) + (.related // 0) + (.featured // 0))' index.json 2>/dev/null || echo 0)
+            caps=$(jq '(.trim // {}) | (.summary_cap // 0)' index.json 2>/dev/null || echo 0)
+            echo "trim: lost=${lost} summary_cap=${caps}"
+            if [ "${lost}" -gt 10 ] || [ "${caps}" -gt 0 ]; then
+              over=1
+              echo "::warning::元数据发生裁剪（丢失 ${lost} 条推荐 / 压缩 ${caps} 轮简介），数据仍会发布"
+            fi
+          else
+            echo "no index.json（前面步骤失败）"
+          fi
+          echo "over=${over}" >> "$GITHUB_OUTPUT"
 
       - name: Trim legacy calendar.json to size budget
         run: |
@@ -1262,7 +1301,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           cp -f ../calendar.json calendar.json
           cp -f ../index.json index.json
-          cp -f ../sources.json sources.json
+          if [ -f ../sources.json ]; then cp -f ../sources.json sources.json; fi
           mkdir -p covers
           if [ -n "$(find ../covers -maxdepth 1 -name '*.webp' -print -quit)" ]; then
             cp -f ../covers/*.webp covers/
@@ -1306,14 +1345,21 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Open issue on failure
-        if: failure()
+      - name: Open issue on failure or heavy trim
+        if: failure() || steps.trim.outputs.over == '1'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIM_OVER: ${{ steps.trim.outputs.over }}
         run: |
           set -uo pipefail
-          title="metadata 生成失败：$(date -u +%F)"
-          body=$(printf '本次定时任务失败，**没有发布新数据**（客户端继续用上一版）。\n\n- 运行记录：%s/%s/actions/runs/%s\n- 常见原因：Bangumi 接口异常 / 封面下载失败 / 体积或结构校验不通过。\n- 处理：看该次运行日志定位；数据不会变坏，只是停更。\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ "${TRIM_OVER:-0}" = "1" ]; then
+            title="metadata 裁剪告警：$(date -u +%F)"
+            body=$(printf '本轮元数据发生**裁剪**（体积超预算），**数据已正常发布**，但部分推荐/简介被丢弃。\n\n- 运行记录：%s\n- 处理：看 `index.json` 的 `trim` 字段；要么调大 `--index-limit`，要么缩减条目。\n- 说明：这是告警不是故障，客户端不受影响。\n' "$run_url")
+          else
+            title="metadata 生成失败：$(date -u +%F)"
+            body=$(printf '本次定时任务失败，**没有发布新数据**（客户端继续用上一版）。\n\n- 运行记录：%s\n- 常见原因：Bangumi 接口异常 / 封面下载失败 / 体积或结构校验不通过。\n- 处理：看该次运行日志定位；数据不会变坏，只是停更。\n' "$run_url")
+          fi
           existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty' 2>/dev/null || true)
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body" || true

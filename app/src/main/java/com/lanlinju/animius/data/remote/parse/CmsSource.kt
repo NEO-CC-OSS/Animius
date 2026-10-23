@@ -33,10 +33,13 @@ import org.jsoup.Jsoup
  * - UA 用简洁 `Mozilla/5.0`（实测完整 Chrome UA 反而触发挑战页），单请求 10 s。
  *
  * 域名漂移（2026-10-23 任务 B / C②）：
- * - 候选顺序：当前 `baseUrl`（用户自定义或上次成功的域名）→ 远程清单缓存 → `CANDIDATE_DOMAINS`；
+ * - 首轮候选：当前 `baseUrl`（用户自定义或上次成功的域名）→ `CANDIDATE_DOMAINS`；
+ *   **远程清单缓存不进首轮**，只在首轮全挂后的二次机会里出现（否则缓存域名吃光首轮预算、
+ *   内置兜底永远试不到——2026-10-23 独立审查 must-fix）；
  * - **只在快速失败时顺延**（连接重置 / DNS 失败 / 非 200 / 非 JSON 挑战页），最多 2 个候选；
  *   超时类失败不顺延（换域名只会把总耗时翻倍）；
- * - 内置候选全挂后才按需拉 metadata 分支的 `sources.json`（常态零请求，24 h 内不重复拉）；
+ * - 内置候选试完、或首轮预算耗尽，才按需拉 metadata 分支的 `sources.json`
+ *   （常态零请求，24 h 内不重复拉，清单未上线时 404 也记 24 h）；
  * - 顺延成功即更新 [baseUrl]，后续详情/取址自动拼新域名；用户自定义域名始终第一优先，
  *   自动顺延**不写回设置**。
  */
@@ -105,26 +108,23 @@ abstract class CmsSource : AnimeSource {
     }
 
     /**
-     * 候选顺序：当前域名（用户自定义或上次成功的）→ 清单缓存 → 内置。
+     * 首轮候选：当前域名（用户自定义或上次成功的）→ 用户自定义 → 内置。
      * 当前域名放第一位，避免「已经换到能用的域名，下次又从死掉的自定义域名重试一遍」。
+     * 远程清单缓存**不进首轮**（见 [CmsDomainPolicy.firstRoundCandidates]）。
      */
-    private fun domainCandidates(): List<String> {
-        val current = CmsDomainPolicy.canonical(baseUrl)
-        val ordered = CmsDomainPolicy.orderedDomains(
+    private fun domainCandidates(): List<String> =
+        CmsDomainPolicy.firstRoundCandidates(
+            current = baseUrl,
             userDomain = userDomainOrNull(),
-            cached = sharedSourcesLoader.cachedDomains(modeTag),
             builtIn = CANDIDATE_DOMAINS,
         )
-        return if (current.isEmpty()) ordered else listOf(current) + ordered.filterNot { it == current }
-    }
 
     /**
-     * 首批候选全挂后的「二次机会」：只有内置候选**全部**试过才去拉远程清单（常态零请求）。
-     * 拉到的域名最多再用 [CmsDomainPolicy.MAX_FALLBACK_CANDIDATES] 个。
+     * 首轮全挂后的「二次机会」：内置候选试完**或**首轮预算耗尽，才去拉远程清单（常态零请求）。
+     * 清单缓存里的域名也从这里进入；拉到的域名最多再用 [CmsDomainPolicy.MAX_FALLBACK_CANDIDATES] 个。
      */
     private suspend fun remoteDomains(tried: Set<String>): List<String> {
-        val builtIn = CANDIDATE_DOMAINS.map { CmsDomainPolicy.canonical(it) }
-        if (!tried.containsAll(builtIn)) return emptyList()
+        if (!CmsDomainPolicy.shouldPullRemote(tried, CANDIDATE_DOMAINS)) return emptyList()
         "CMS domain fallback mode=$modeTag try=${tried.size} pull=${CmsSourcesManifest.FILE_NAME}"
             .log("BehaviorTrace")
         val domains = sharedSourcesLoader.load(modeTag)

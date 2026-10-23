@@ -16,5 +16,7 @@ object MdSource : CmsSource() {
 
     override val modeTag: String = "Md"
 
+    /** 顺延成功会并发改写它（搜索结果/详情请求可能同时在跑），加 @Volatile 保证可见性 */
+    @Volatile
     override var baseUrl: String = getDefaultDomain()
 }

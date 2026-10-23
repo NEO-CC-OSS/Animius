@@ -22,6 +22,9 @@ internal class CmsDomainException(
  *   额外候选同样受 [maxFallbackCandidates] 约束；
  * - 成功即返回，由调用方把 `baseUrl` 换成实际成功的域名（后续详情/取址才会拼新域名）；
  * - 全失败抛 [CmsDomainException]，消息里带「已尝试哪些域名」。
+ *
+ * 不变量：**除了 [CancellationException]，本类只会抛 [CmsDomainException]**。
+ * `onExhausted`（拉清单）里的任何异常都在内部兜住，按「没拿到额外候选」处理。
  */
 internal class CmsDomainFailover(
     private val modeTag: String,
@@ -94,7 +97,18 @@ internal class CmsDomainFailover(
 
         attempt(domains.distinct(), 1 + maxFallbackCandidates)?.let { return it }
 
-        val extra = onExhausted(tried.toSet()).filterNot { it in tried }.distinct()
+        // 二次机会（拉远程清单）不许把异常漏出去：它只是增益，失败就当没拿到候选
+        val extra = try {
+            onExhausted(tried.toSet()).filterNot { it in tried }.distinct()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            (
+                "CMS domain fallback mode=$modeTag onExhausted crashed: " +
+                    "${e.javaClass.simpleName}: ${e.message.orEmpty().take(80)}"
+                ).log("BehaviorTrace")
+            emptyList()
+        }
         if (extra.isNotEmpty()) {
             attempt(extra, maxFallbackCandidates)?.let { return it }
         }

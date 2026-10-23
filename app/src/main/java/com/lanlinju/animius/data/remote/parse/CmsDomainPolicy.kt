@@ -1,14 +1,14 @@
 package com.lanlinju.animius.data.remote.parse
 
 import java.net.URI
+import kotlinx.coroutines.CancellationException
 
 /**
  * 采集源域名策略（纯函数，便于 JVM 单测）。
  *
- * 域名优先级（2026-10-23 任务 B / C②）：
- * 1. 用户自定义域名（设置页 `KEY_SOURCE_DOMAIN`）：永远第一优先，自动顺延不写回设置；
- * 2. 远程清单 `sources.json` 的本地缓存：内置候选全挂后才可能用上；
- * 3. 内置 `CANDIDATE_DOMAINS`。
+ * 首轮候选（[firstRoundCandidates]）：当前域名（用户自定义或上次成功的）→ 内置 `CANDIDATE_DOMAINS`。
+ * **远程清单缓存不进首轮**：它只在首轮全挂后的「二次机会」里出现（见 [shouldPullRemote]），
+ * 否则缓存域名会吃光首轮预算、内置兜底永远试不到（2026-10-23 独立审查 must-fix）。
  *
  * 顺延只在「快速失败」时发生：连接重置 / DNS 失败 / 非 200 / 非 JSON 挑战页都算；
  * **超时类失败不换域名**——换域名只会把总耗时翻倍，而超时通常意味着整条网络都不通。
@@ -17,6 +17,9 @@ internal object CmsDomainPolicy {
 
     /** 一次请求最多顺延几个候选（首个域名之外） */
     const val MAX_FALLBACK_CANDIDATES = 2
+
+    /** 首轮尝试上限：首个 + 顺延额度 */
+    const val FIRST_ROUND_BUDGET = 1 + MAX_FALLBACK_CANDIDATES
 
     private const val SCHEME = "https://"
     private const val MIN_URL_LENGTH = 10
@@ -27,11 +30,24 @@ internal object CmsDomainPolicy {
     private val TLD = Regex("[A-Za-z]{2,}")
 
     /**
-     * 组装候选顺序：用户自定义 → 清单缓存 → 内置，去重并统一成无尾斜杠形式
-     * （`CmsSource` 拼 URL 时是 `domain + "/api.php/..."`）。
+     * 首轮候选：当前域名 → 用户自定义 → 内置；去重、统一无尾斜杠形式。
      *
      * 用户手填的域名只做空白/尾斜杠归一、**不校验**：校验只针对远程清单条目，
      * 免得一个「不合规但能用」的自定义域名被静默丢弃。
+     */
+    fun firstRoundCandidates(
+        current: String,
+        userDomain: String?,
+        builtIn: List<String>,
+    ): List<String> {
+        val ordered = orderedDomains(userDomain, emptyList(), builtIn)
+        val head = canonical(current)
+        return if (head.isEmpty()) ordered else listOf(head) + ordered.filterNot { it == head }
+    }
+
+    /**
+     * 通用候选排序（用户自定义 → 缓存 → 内置）。
+     * 采集源的**首轮**不用缓存（见 [firstRoundCandidates]），缓存只经 [shouldPullRemote] 的二次机会进入。
      */
     fun orderedDomains(
         userDomain: String?,
@@ -47,6 +63,23 @@ internal object CmsDomainPolicy {
         cached.forEach { add(it) }
         builtIn.forEach { add(it) }
         return result.toList()
+    }
+
+    /**
+     * 首轮失败后是否去拉远程清单（并进入二次机会）。
+     *
+     * 两个条件任一成立就拉：
+     * - 内置候选**全部**试过（正常的「内置兜底已用尽」）；
+     * - 首轮预算已耗尽（用户自定义域名 + 当前域名把 3 次机会吃光，内置根本没轮到）。
+     *
+     * 后者是 2026-10-23 审查 must-fix：只判「内置试完」会让这类源既不拉清单、
+     * 也不刷新缓存，永久卡死。
+     */
+    fun shouldPullRemote(tried: Set<String>, builtIn: List<String>): Boolean {
+        val builtInCanonical = builtIn.map { canonical(it) }
+        val builtInExhausted = tried.containsAll(builtInCanonical)
+        val budgetExhausted = tried.size >= FIRST_ROUND_BUDGET
+        return builtInExhausted || budgetExhausted
     }
 
     /** 只做空白/尾斜杠归一，不校验 */
@@ -79,15 +112,19 @@ internal object CmsDomainPolicy {
 
     /**
      * 超时类失败：换域名没有意义，反而让总耗时翻倍。
-     * 按类名判断，避免 ktor/OkHttp 不同层的超时类型被漏掉。
+     *
+     * - `InterruptedIOException` 及子类（含 `SocketTimeoutException`、OkHttp 的超时）算超时；
+     * - ktor 的 `ConnectTimeoutException` / `HttpRequestTimeoutException` 算超时；
+     * - **`CancellationException`（含 `TimeoutCancellationException`）不算超时**：那是取消，
+     *   必须原样重抛，不能被当成失败吞掉（协程取消不是网络故障）。
      */
     fun isTimeoutFailure(error: Throwable): Boolean {
         var current: Throwable? = error
         var guard = 0
         while (current != null && guard < 8) {
-            if (current is java.net.SocketTimeoutException) return true
+            if (current is CancellationException) return false
+            if (current is java.io.InterruptedIOException) return true
             when (current.javaClass.simpleName) {
-                "SocketTimeoutException",
                 "ConnectTimeoutException",
                 "HttpRequestTimeoutException",
                 -> return true

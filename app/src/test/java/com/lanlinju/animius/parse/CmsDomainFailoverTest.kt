@@ -2,6 +2,7 @@ package com.lanlinju.animius.parse
 
 import com.lanlinju.animius.data.remote.parse.CmsDomainException
 import com.lanlinju.animius.data.remote.parse.CmsDomainFailover
+import com.lanlinju.animius.data.remote.parse.CmsDomainPolicy
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -132,6 +133,43 @@ class CmsDomainFailoverTest {
         assertEquals("https://remote.com", outcome.domain)
         assertEquals(1, exhausted)
         assertEquals(4, outcome.tried.size)
+    }
+
+    @Test
+    fun `cached domain is used on the second chance`() = runBlocking {
+        // 场景：内置两个域名全挂，清单缓存里有一个新域名（CmsSource.remoteDomains 的行为）
+        val builtIn = listOf("https://bfzyapi.com", "https://app.bfzyapi.com")
+        val cached = listOf("https://new.bfzyapi.com")
+        val outcome = failover().fetch(
+            domains = builtIn,
+            fetch = { domain ->
+                if (domain in cached) okBody else throw IOException("Connection reset")
+            },
+            onExhausted = { tried ->
+                if (!CmsDomainPolicy.shouldPullRemote(tried, builtIn)) {
+                    emptyList()
+                } else {
+                    cached.filterNot { it in tried }
+                }
+            },
+        )
+        assertEquals("https://new.bfzyapi.com", outcome.domain)
+        assertEquals(3, outcome.tried.size)
+    }
+
+    @Test
+    fun `exhausted callback crash does not escape`() {
+        val error = assertThrows(CmsDomainException::class.java) {
+            runBlocking {
+                failover().fetch(
+                    domains = listOf("https://a.com"),
+                    fetch = { throw IOException("Connection reset") },
+                    // 非 Exception 的 Throwable 也不能穿透（拉清单只是增益）
+                    onExhausted = { throw AssertionError("boom") },
+                )
+            }
+        }
+        assertTrue(error.message!!.contains("播放源域名可能已失效"))
     }
 
     @Test

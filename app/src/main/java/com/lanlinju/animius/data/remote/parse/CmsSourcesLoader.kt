@@ -135,7 +135,18 @@ internal class CmsSourcesLoader(
         if (isFresh()) return cached
         if (now() - lastAttemptAtMs < FAILURE_BACKOFF_MS) return cached
         lastAttemptAtMs = now()
-        val job = scope.async { pull(modeTag) }
+        // 拉取跑在应用级作用域：grace 到点后没人 await，异常必须在这里兜住并留日志，
+        // 否则 SupervisorJob 会把非取消异常静默吞掉（2026-10-23 审查 should-fix）。
+        val job = scope.async {
+            try {
+                pull(modeTag)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                log("CMS sources pull crashed: ${e.javaClass.simpleName}: ${e.message.orEmpty().take(80)}")
+                emptyList()
+            }
+        }
         val result = withTimeoutOrNull(graceMs) { job.await() }
         return result?.takeIf { it.isNotEmpty() } ?: cached
     }

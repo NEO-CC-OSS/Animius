@@ -1,8 +1,10 @@
 package com.lanlinju.animius.parse
 
 import com.lanlinju.animius.data.remote.parse.CmsDomainPolicy
+import java.io.InterruptedIOException
 import java.io.IOException
 import java.net.SocketTimeoutException
+import kotlinx.coroutines.CancellationException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -44,6 +46,45 @@ class CmsDomainPolicyTest {
     }
 
     @Test
+    fun `first round keeps current user and builtin and never the cache`() {
+        // 2026-10-23 审查 must-fix：清单缓存不得进首轮，否则会吃光预算、内置永远试不到
+        val round = CmsDomainPolicy.firstRoundCandidates(
+            current = "https://last-ok.example.com/",
+            userDomain = "https://mine.example.com/",
+            builtIn = listOf("https://cj.lziapi.com/"),
+        )
+        assertEquals(
+            listOf(
+                "https://last-ok.example.com",
+                "https://mine.example.com",
+                "https://cj.lziapi.com",
+            ),
+            round,
+        )
+    }
+
+    @Test
+    fun `remote list is pulled when builtin tried or budget exhausted`() {
+        val builtIn = listOf("https://bfzyapi.com/", "https://app.bfzyapi.com/")
+        // 内置没试完、预算也没耗尽 → 不拉
+        assertFalse(CmsDomainPolicy.shouldPullRemote(setOf("https://x.com"), builtIn))
+        // 内置试完 → 拉
+        assertTrue(
+            CmsDomainPolicy.shouldPullRemote(
+                setOf("https://bfzyapi.com", "https://app.bfzyapi.com"),
+                builtIn,
+            ),
+        )
+        // 预算耗尽（当前 + 自定义 + 1 个内置 = 3 次）→ 拉（即使内置没试完）
+        assertTrue(
+            CmsDomainPolicy.shouldPullRemote(
+                setOf("https://current.com", "https://mine.com", "https://bfzyapi.com"),
+                builtIn,
+            ),
+        )
+    }
+
+    @Test
     fun `valid domains are accepted`() {
         assertEquals(
             "https://cj.lziapi.com",
@@ -78,6 +119,7 @@ class CmsDomainPolicyTest {
     @Test
     fun `timeout failures are recognized`() {
         assertTrue(CmsDomainPolicy.isTimeoutFailure(SocketTimeoutException("read timeout")))
+        assertTrue(CmsDomainPolicy.isTimeoutFailure(InterruptedIOException("timeout")))
         assertTrue(
             CmsDomainPolicy.isTimeoutFailure(
                 IOException("wrapped", SocketTimeoutException("timeout")),
@@ -85,6 +127,8 @@ class CmsDomainPolicyTest {
         )
         assertFalse(CmsDomainPolicy.isTimeoutFailure(IOException("Connection reset")))
         assertFalse(CmsDomainPolicy.isTimeoutFailure(IllegalStateException("非 JSON")))
+        // 取消不是超时：TimeoutCancellationException 也是 CancellationException，必须原样重抛
+        assertFalse(CmsDomainPolicy.isTimeoutFailure(CancellationException("timeout")))
     }
 
     @Test
