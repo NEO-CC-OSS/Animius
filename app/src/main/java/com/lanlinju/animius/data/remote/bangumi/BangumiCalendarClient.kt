@@ -34,6 +34,11 @@ class BangumiCalendarClient @Inject constructor(
 ) {
 
     companion object {
+        /**
+         * 旧日历包地址。`calendar.json` 已于 2026-10-22 停止发布，此地址现在只会 404；
+         * 当前只用到 [loadCachedOnly]（读本地缓存、不发网络），**不要恢复网络拉取**。
+         * 保留常量只是为了让仓库地址统一指向新仓库，不代表这是一条可用通道。
+         */
         const val METADATA_URL =
             "https://raw.githubusercontent.com/NEO-CC-OSS/Animius-TV/metadata/calendar.json"
 

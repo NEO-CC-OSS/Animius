@@ -6,7 +6,7 @@ name: Metadata Calendar
 #                     covers/{id}.webp、封面内容 hash（客户端拼 ?v={hash} 做缓存失效）
 #                     和 32x45 模糊占位图 lqip（WebP data URI）。
 #   covers/{id}.webp  独立封面文件（480x672 WebP q70），客户端按需加载，不再内嵌 base64。
-#   calendar.json     旧包（schema 1，内嵌 base64 封面），只给旧客户端与回退用。
+#   calendar.json     已下线（2026-10-22）：不再发布到 metadata 分支；客户端用本地旧缓存兜底。
 #
 # 封面增量复用：job 先 checkout 上一版 metadata 分支，内容 hash 未变的封面直接复用，
 # 只有新增/变化的封面才重新下载与编码；未变化的封面不会产生新 git 对象，仓库不按天膨胀。
@@ -368,7 +368,7 @@ jobs:
           set -euo pipefail
           cat > build_metadata.py <<'PY'
           #!/usr/bin/env python3
-          """Build lightweight metadata: covers/*.webp + index.json (+ legacy calendar.json).
+          """Build lightweight metadata: covers/*.webp + index.json（legacy calendar.json 仍生成，但已下线、不发布）。
 
           Modes
             plan  : read merged calendar.json + the previous metadata-branch manifest and print
@@ -694,7 +694,7 @@ jobs:
 
 
           def build_legacy(calendar, covers, args):
-              """Old schema-1 calendar.json with base64 covers (kept for old clients)."""
+              """Old schema-1 calendar.json with base64 covers（已下线，仅保留生成逻辑，不再发布）。"""
 
               def data_uri(item_id, kind):
                   path = os.path.join(covers, "%s.webp" % item_id)
