@@ -34,11 +34,14 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # 单元测试门禁：纯逻辑/解析回归，不依赖网络与真机
+      # 单元测试门禁：纯逻辑/解析回归，不依赖网络与真机。
+      # 只跑 :app：`danmaku` 模块里的 2 个上游测试用 Dispatchers.Main（Android 主线程），
+      # 在 JVM 单测环境里必然 IllegalStateException，且含 8 秒真实延时；video-player /
+      # download 无单测源码。2026-10-24 首次真实 CI 运行确认（run 40046369455）。
       - name: Run unit tests
         run: |
           chmod +x ./gradlew
-          ./gradlew testDebugUnitTest
+          ./gradlew :app:testDebugUnitTest
         env:
           DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
           DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
