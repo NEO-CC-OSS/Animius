@@ -31,6 +31,12 @@ jobs:
     timeout-minutes: 50
 
     steps:
+      # 必须 checkout 源码：sources.json 是从 app/src/main/.../parse/*Source.kt 的
+      # CANDIDATE_DOMAINS 解析出来的（App 是唯一事实来源）。2026-10-24 首次真实运行发现
+      # 缺这一步 → 解析全报 missing、sources.json 永远不产出（本地从未真正跑过 workflow）。
+      - name: Checkout source
+        uses: actions/checkout@v4
+
       - name: Fetch Bangumi calendar
         run: |
           set -euo pipefail
