@@ -6,14 +6,14 @@
 
 **轻量、无广告、遥控器优先的 Android TV 动漫播放器**
 
-约 4.6 MB · Android 8.0+ · 支持弹幕
+约 4.8 MB · Android 7.0+ · 支持弹幕
 
-[![Release](https://img.shields.io/github/v/release/NEO-CC-OSS/Animius?style=flat-square)](https://github.com/NEO-CC-OSS/Animius/releases/latest)
-[![APK](https://img.shields.io/badge/APK-4.6%20MB-blue?style=flat-square)](https://github.com/NEO-CC-OSS/Animius/releases/latest)
+[![Release](https://img.shields.io/github/v/release/NEO-CC-OSS/Animius-TV?style=flat-square)](https://github.com/NEO-CC-OSS/Animius-TV/releases/latest)
+[![APK](https://img.shields.io/badge/APK-4.8%20MB-blue?style=flat-square)](https://github.com/NEO-CC-OSS/Animius-TV/releases/latest)
 [![License](https://img.shields.io/badge/License-GPL--3.0-orange?style=flat-square)](#-致谢与声明)
-[![Platform](https://img.shields.io/badge/Platform-Android%208.0%2B-green?style=flat-square)](#-兼容性)
+[![Platform](https://img.shields.io/badge/Platform-Android%207.0%2B-green?style=flat-square)](#-兼容性)
 [![No Ads](https://img.shields.io/badge/Ads-none-brightgreen?style=flat-square)](#-项目定位)
-[![CI](https://github.com/NEO-CC-OSS/Animius/actions/workflows/android_ci.yml/badge.svg?branch=source-danmaku)](https://github.com/NEO-CC-OSS/Animius/actions/workflows/android_ci.yml)
+[![CI](https://github.com/NEO-CC-OSS/Animius-TV/actions/workflows/android_ci.yml/badge.svg?branch=source-danmaku)](https://github.com/NEO-CC-OSS/Animius-TV/actions/workflows/android_ci.yml)
 
 <table>
   <tr>
@@ -32,8 +32,8 @@
 
 | 原则 | 具体做法 |
 |---|---|
-| **轻量** | 安装包约 4.6 MB；无广告 SDK、无后台常驻服务、不依赖 Google 服务框架。 |
-| **兼容** | Android 8.0 起可安装；不要求 Google TV（Leanback）认证，普通 Android 电视、盒子、投影仪都能用。 |
+| **轻量** | 安装包约 4.8 MB；无广告 SDK、无后台常驻服务、不依赖 Google 服务框架。 |
+| **兼容** | Android 7.0 起可安装；不要求 Google TV（Leanback）认证，普通 Android 电视、盒子、投影仪都能用。 |
 | **TV 大屏** | 布局、字号、焦点按远距离观看设计，不把手机界面直接放大。 |
 | **遥控器优先** | 方向键焦点、焦点描边、焦点记忆、长按操作、播放器直控；不设计必须触摸才能用的功能。 |
 | **弹幕** | 接入[弹弹play 开放弹幕网络](https://www.dandanplay.com)，集数智能匹配；加载失败时说明原因，而不是静默消失。 |
@@ -52,12 +52,12 @@
 
 ## 📥 下载安装
 
-1. 打开 [Releases Latest](https://github.com/NEO-CC-OSS/Animius/releases/latest) 下载最新 `.apk`
+1. 打开 [Releases Latest](https://github.com/NEO-CC-OSS/Animius-TV/releases/latest) 下载最新 `.apk`
    （单包包含 arm64-v8a / armeabi-v7a / x86 / x86_64，无需挑架构）
 2. 用 U 盘、局域网或电视浏览器把 APK 传到设备
 3. 按系统提示允许「安装未知来源应用」
 
-- **系统要求**：Android 8.0（API 26）及以上；不需要 Google 服务框架
+- **系统要求**：Android 7.0（API 24）及以上；不需要 Google 服务框架
 - **覆盖升级**：直接安装新版本即可保留数据；若提示签名冲突，说明设备上装过其他来源的旧版本，需先卸载再安装
 
 ## 📱 兼容性
@@ -65,9 +65,9 @@
 | 设备 / 环境 | 支持情况 |
 |---|---|
 | Android TV / Google TV | ✅ 支持遥控器操作 |
-| 普通 Android 电视、盒子、投影仪（8.0+） | ✅ 不要求 Leanback 认证 |
+| 普通 Android 电视、盒子、投影仪（7.0+） | ✅ 不要求 Leanback 认证 |
 | 手机 / 平板 | ✅ 可用，交互以 TV 为准 |
-| Android 7.x 及以下 | ⏳ 当前未支持（基线 8.0，向下兼容是长期方向） |
+| Android 6.x 及以下 | ❌ 不支持（当前基线 Android 7.0） |
 | Google 服务框架（GMS） | 不需要 |
 
 ## ❓ 常见问题
@@ -84,14 +84,6 @@
 **手机能用吗？**
 可以安装使用，但本项目主要面向 TV 大屏优化，交互体验以电视遥控器为准。
 
-## 🗺 近期方向
-
-- Android TV Leanback 桌面入口与 banner
-- 下载功能反馈：进度、失败提示、更明显的入口
-- 播放/源错误分类：网络、证书、站点改版分别提示
-- 评估 minSdk 下探，覆盖更老的电视与盒子
-- 可选弹幕净化（去重 / 屏蔽广告），默认关闭
-
 ## 🔧 自行构建
 
 - 环境：JDK 17 + Android SDK（用 Android Studio 打开工程最省事）
@@ -99,8 +91,16 @@
 - 弹幕功能：需在 [弹弹play 开放平台](https://www.dandanplay.com)申请开发者凭证，并在工程根目录的 `local.properties` 中配置 `dandanplayAppId` / `dandanplayAppSecret`（该文件不会入库）
 - 本项目仅供学习交流，弹幕功能免费，无任何商业用途
 
+## 📄 许可与修改声明
+
+- 本项目按 **GPL-3.0** 发布，完整条款见 [LICENSE](./LICENSE)。
+- 本仓库基于上游 [lanlinju/Animius](https://github.com/lanlinju/Animius) **v1.3.5**（GPL-3.0）修改而来，具体修改内容与日期见 git 提交历史。
+- 版本号 `2.0.0-tv.N` 是本项目的独立编号，与上游版本号无关。
+- 「仅供学习交流、无任何商业用途」是本项目的定位描述，**不构成对 GPL-3.0 的额外限制**。
+
 ## 🙏 致谢与声明
 
-- 上游项目：[lanlinju/Animius](https://github.com/lanlinju/Animius)（GPL-3.0）。本仓库是经原作者同意独立维护的 TV 定制分支，并沿用「Animius TV版」名称，感谢原作者 [Lanlinju](https://github.com/lanlinju) 的开源工作。上游的应用架构说明与参考来源详见[上游仓库 README](https://github.com/lanlinju/Animius#readme)。
+- 上游项目：[lanlinju/Animius](https://github.com/lanlinju/Animius)（GPL-3.0）。本仓库是经原作者同意独立维护的 TV 定制版，并沿用「Animius TV版」名称，感谢原作者 [Lanlinju](https://github.com/lanlinju) 的开源工作。上游的应用架构说明与参考来源详见[上游仓库 README](https://github.com/lanlinju/Animius#readme)。
+- 元数据来源：[Bangumi](https://bangumi.tv)，非官方；仅用于番剧信息与封面展示。
 - 弹幕数据：[弹弹play 开放弹幕网络](https://www.dandanplay.com)
 - 本项目不存储、不分发任何影视内容，所有数据均来自公共网络；仅供学习交流，请于下载后 24 小时内删除，如认可相关作品请支持正版。

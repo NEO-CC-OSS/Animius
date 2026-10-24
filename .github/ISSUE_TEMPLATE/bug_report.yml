@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         感谢反馈！请尽量填写以下信息，信息越全问题越好定位。
-        使用上的疑问与交流建议前往 [Discussions](https://github.com/NEO-CC-OSS/Animius/discussions)。
+        使用上的疑问与交流建议前往 [Discussions](https://github.com/NEO-CC-OSS/Animius-TV/discussions)。
 
   - type: dropdown
     id: install_source
