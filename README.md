@@ -1,3 +1,6 @@
+> **本仓库已迁移至 [NEO-CC-OSS/Animius-TV](https://github.com/NEO-CC-OSS/Animius-TV)。**
+> 新版本、后续更新与问题反馈都在新仓库；本仓库保留作历史版本下载与过渡更新（旧链接仍可用）。
+
 <div align="center">
 
 <img src="./image/icon-tv.png" width="120" alt="Animius TV版"/>
