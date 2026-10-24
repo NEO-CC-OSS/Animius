@@ -9,11 +9,11 @@ val TABS = listOf("一", "二", "三", "四", "五", "六", "日")
 
 const val CRASH_LOG_FILE = "anime_crash_logs.txt"
 
-// 指向本 fork（NEO-CC-OSS/Animius）：更新检查与管理链接均指向 TV 版自己的发布，
+// 指向本项目仓库（NEO-CC-OSS/Animius-TV）：更新检查与管理链接均指向 TV 版自己的发布，
 // 避免收到上游版本提示、或把用户引导到不含 TV 优化的上游安装包
-const val GITHUB_ADDRESS = "https://github.com/NEO-CC-OSS/Animius"
-const val CHECK_UPDATE_ADDRESS = "https://api.github.com/repos/NEO-CC-OSS/Animius/releases/latest"
-const val GITHUB_RELEASE_ADDRESS = "https://github.com/NEO-CC-OSS/Animius/releases/latest"
+const val GITHUB_ADDRESS = "https://github.com/NEO-CC-OSS/Animius-TV"
+const val CHECK_UPDATE_ADDRESS = "https://api.github.com/repos/NEO-CC-OSS/Animius-TV/releases/latest"
+const val GITHUB_RELEASE_ADDRESS = "https://github.com/NEO-CC-OSS/Animius-TV/releases/latest"
 
 const val ANIME_DATABASE = "anime_database.db"
 const val FAVOURITE_TABLE = "favourite_table"

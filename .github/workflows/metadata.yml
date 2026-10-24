@@ -34,7 +34,7 @@ jobs:
       - name: Fetch Bangumi calendar
         run: |
           set -euo pipefail
-          UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius)"
+          UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius-TV)"
           curl -fsSL --retry 3 --retry-delay 5 -A "$UA" \
             -o raw_calendar.json \
             "https://api.bgm.tv/calendar"
@@ -91,7 +91,7 @@ jobs:
       - name: Fetch subject summaries and relations
         run: |
           set -euo pipefail
-          UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius)"
+          UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius-TV)"
           mkdir -p subjects relations
           ok=0
           fail=0
@@ -207,7 +207,7 @@ jobs:
       - name: Fetch related subject details
         run: |
           set -euo pipefail
-          UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius)"
+          UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius-TV)"
           mkdir -p related_details
           # 只取不在本周表里的相关条目（周表条目已有详情），按被引用次数从高到低取 200 个；
           # 预算 4 分钟。这些详情用于过滤 NSFW、补简介/标签/别名，让相关推荐点进详情不是空白页。
@@ -285,7 +285,7 @@ jobs:
       - name: Fetch featured subjects
         run: |
           set -euo pipefail
-          UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius)"
+          UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius-TV)"
           # 首页「高分推荐」：Bangumi 评分排名前 30 的动画（不含 NSFW）
           if curl -fsSL --retry 2 --retry-delay 3 --max-time 20 -A "$UA" \
               -o featured_raw.json \
@@ -1009,7 +1009,7 @@ jobs:
       - name: Fetch changed covers
         run: |
           set -euo pipefail
-          UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius)"
+          UA="AnimiusTV-Metadata/1.0 (https://github.com/NEO-CC-OSS/Animius-TV)"
           mkdir -p raw_covers
           ok=0
           fail=0

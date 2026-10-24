@@ -96,7 +96,7 @@ class MetadataIndexParserTest {
         val meta = parsed.items.getValue(390200)
 
         assertEquals(
-            "https://gcore.jsdelivr.net/gh/NEO-CC-OSS/Animius@metadata/covers/390200.webp?v=hash390200",
+            "https://gcore.jsdelivr.net/gh/NEO-CC-OSS/Animius-TV@metadata/covers/390200.webp?v=hash390200",
             anime.img,
         )
         // 第二级：jsDelivr 备用域名（MediaSmall 的第一顺位回退）
@@ -312,15 +312,15 @@ class MetadataIndexParserTest {
 
         assertEquals(3, urls.size)
         assertEquals(
-            "https://gcore.jsdelivr.net/gh/NEO-CC-OSS/Animius@metadata/covers/1.webp?v=abc",
+            "https://gcore.jsdelivr.net/gh/NEO-CC-OSS/Animius-TV@metadata/covers/1.webp?v=abc",
             urls[0],
         )
         assertEquals(
-            "https://testingcf.jsdelivr.net/gh/NEO-CC-OSS/Animius@metadata/covers/1.webp?v=abc",
+            "https://testingcf.jsdelivr.net/gh/NEO-CC-OSS/Animius-TV@metadata/covers/1.webp?v=abc",
             urls[1],
         )
         assertEquals(
-            "https://gh-proxy.com/https://raw.githubusercontent.com/NEO-CC-OSS/Animius/metadata/covers/1.webp?v=abc",
+            "https://gh-proxy.com/https://raw.githubusercontent.com/NEO-CC-OSS/Animius-TV/metadata/covers/1.webp?v=abc",
             urls[2],
         )
         assertEquals(urls[0], MetadataCoverUrls.primary("covers/1.webp", "abc"))
@@ -330,14 +330,14 @@ class MetadataIndexParserTest {
     @Test
     fun `cover url trims leading slash and skips empty hash`() {
         assertEquals(
-            "https://gcore.jsdelivr.net/gh/NEO-CC-OSS/Animius@metadata/covers/1.webp",
+            "https://gcore.jsdelivr.net/gh/NEO-CC-OSS/Animius-TV@metadata/covers/1.webp",
             MetadataCoverUrls.primary("/covers/1.webp", ""),
         )
         assertEquals("", MetadataCoverUrls.primary("", "abc"))
         assertTrue(MetadataCoverUrls.candidates("", "abc").isEmpty())
         // 非空返回类型不写 assertNotNull（空断言）；备用域名的拼接同样受 hash 影响
         assertEquals(
-            "https://testingcf.jsdelivr.net/gh/NEO-CC-OSS/Animius@metadata/covers/1.webp?v=abc",
+            "https://testingcf.jsdelivr.net/gh/NEO-CC-OSS/Animius-TV@metadata/covers/1.webp?v=abc",
             MetadataCoverUrls.backup("covers/1.webp", "abc"),
         )
     }

@@ -160,8 +160,8 @@ class CmsSourcesManifestTest {
         assertTrue(CmsSourcesManifest.looksMissing("404: Not Found"))
         assertTrue(
             CmsSourcesManifest.looksMissing(
-                "Couldn't find the requested file /gh/NEO-CC-OSS/Animius@metadata/sources.json " +
-                    "in NEO-CC-OSS/Animius.",
+                "Couldn't find the requested file /gh/NEO-CC-OSS/Animius-TV@metadata/sources.json " +
+                    "in NEO-CC-OSS/Animius-TV.",
             ),
         )
         // nginx 默认 404 页无冒号，也属「文件不存在」

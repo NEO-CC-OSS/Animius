@@ -45,7 +45,7 @@ internal class MetadataIndexFetcher(private val httpClient: HttpClient) {
     companion object {
         /** 首选：GitHub contents API（返回 base64 包装的 index.json） */
         const val API_URL =
-            "https://api.github.com/repos/NEO-CC-OSS/Animius/contents/index.json?ref=metadata"
+            "https://api.github.com/repos/NEO-CC-OSS/Animius-TV/contents/index.json?ref=metadata"
 
         /** 次选：gh-proxy 镜像 raw（最新，慢） */
         const val GH_PROXY_URL = MetadataCoverUrls.GH_PROXY_PREFIX + "index.json"

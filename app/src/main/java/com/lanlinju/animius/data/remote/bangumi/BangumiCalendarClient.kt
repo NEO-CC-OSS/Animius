@@ -35,7 +35,7 @@ class BangumiCalendarClient @Inject constructor(
 
     companion object {
         const val METADATA_URL =
-            "https://raw.githubusercontent.com/NEO-CC-OSS/Animius/metadata/calendar.json"
+            "https://raw.githubusercontent.com/NEO-CC-OSS/Animius-TV/metadata/calendar.json"
 
         private const val TAG = "BangumiCalendar"
         private const val CACHE_DIR = "metadata"

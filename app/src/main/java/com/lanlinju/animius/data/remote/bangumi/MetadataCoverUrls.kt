@@ -13,13 +13,13 @@ package com.lanlinju.animius.data.remote.bangumi
 object MetadataCoverUrls {
 
     const val JSDELIVR_PRIMARY_PREFIX =
-        "https://gcore.jsdelivr.net/gh/NEO-CC-OSS/Animius@metadata/"
+        "https://gcore.jsdelivr.net/gh/NEO-CC-OSS/Animius-TV@metadata/"
 
     const val JSDELIVR_BACKUP_PREFIX =
-        "https://testingcf.jsdelivr.net/gh/NEO-CC-OSS/Animius@metadata/"
+        "https://testingcf.jsdelivr.net/gh/NEO-CC-OSS/Animius-TV@metadata/"
 
     const val GH_PROXY_PREFIX =
-        "https://gh-proxy.com/https://raw.githubusercontent.com/NEO-CC-OSS/Animius/metadata/"
+        "https://gh-proxy.com/https://raw.githubusercontent.com/NEO-CC-OSS/Animius-TV/metadata/"
 
     /** 首选地址（jsDelivr 主域名） */
     fun primary(coverPath: String, coverHash: String = ""): String =
